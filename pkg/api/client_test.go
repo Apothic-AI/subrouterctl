@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apothic-AI/subrouterctl/internal/cache"
+	"github.com/Apothic-AI/subrouterctl/pkg/cache"
 )
 
 // testClient builds a client with a cache in front of a test server.

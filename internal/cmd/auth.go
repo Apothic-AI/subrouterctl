@@ -6,9 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Apothic-AI/subrouterctl/internal/api"
-	"github.com/Apothic-AI/subrouterctl/internal/config"
 	"github.com/Apothic-AI/subrouterctl/internal/render"
+	"github.com/Apothic-AI/subrouterctl/pkg/api"
+	"github.com/Apothic-AI/subrouterctl/pkg/config"
 )
 
 // authChannel identifies this CLI to the device authorization service.

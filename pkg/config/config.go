@@ -55,6 +55,18 @@ func CredentialPath() string {
 	return filepath.Join(home, ".subrouter", "credentials.json")
 }
 
+// DefaultCacheDir is where the on-disk cache lives.
+func DefaultCacheDir() string {
+	if p := os.Getenv("SUBROUTER_CACHE_DIR"); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".cache/subrouterctl"
+	}
+	return filepath.Join(home, ".cache", "subrouterctl")
+}
+
 // LoadCredentials reads the credential document. A missing file is not an
 // error: it simply yields an empty set.
 func LoadCredentials(path string) (*Credentials, error) {

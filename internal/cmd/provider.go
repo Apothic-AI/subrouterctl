@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Apothic-AI/subrouterctl/internal/api"
 	"github.com/Apothic-AI/subrouterctl/internal/render"
+	"github.com/Apothic-AI/subrouterctl/pkg/api"
 )
 
 func newProviderCommand() *cobra.Command {

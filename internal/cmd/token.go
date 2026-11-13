@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/Apothic-AI/subrouterctl/internal/api"
 	"github.com/Apothic-AI/subrouterctl/internal/render"
+	"github.com/Apothic-AI/subrouterctl/pkg/api"
 )
 
 func newTokenCommand() *cobra.Command {
@@ -211,21 +210,7 @@ func validSortMode(v string) bool {
 
 // resolveExpiry turns the --expire flag into a unix timestamp.
 func resolveExpiry(v string) (int64, error) {
-	v = strings.TrimSpace(v)
-	switch strings.ToLower(v) {
-	case "", "never", "-1":
-		return -1, nil
-	case "always":
-		return -1, nil
-	}
-	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-		return n, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, fmt.Errorf("invalid --expire %q: use never, 30d, 12h or a unix timestamp", v)
-	}
-	return time.Now().Add(d).Unix(), nil
+	return api.ResolveExpiry(v)
 }
 
 func newTokenListCommand() *cobra.Command {

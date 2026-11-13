@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Apothic-AI/subrouterctl/internal/cache"
+	"github.com/Apothic-AI/subrouterctl/pkg/cache"
 )
 
 // Client talks to a SubRouter site.

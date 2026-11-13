@@ -6,18 +6,15 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/Apothic-AI/subrouterctl/internal/api"
-	"github.com/Apothic-AI/subrouterctl/internal/cache"
-	"github.com/Apothic-AI/subrouterctl/internal/config"
 	"github.com/Apothic-AI/subrouterctl/internal/render"
+	"github.com/Apothic-AI/subrouterctl/pkg/api"
+	"github.com/Apothic-AI/subrouterctl/pkg/cache"
+	"github.com/Apothic-AI/subrouterctl/pkg/config"
 )
 
 var (
@@ -133,14 +130,7 @@ func cfg() (*config.Config, error) {
 
 // defaultCacheDir is where the on-disk cache lives.
 func defaultCacheDir() string {
-	if p := os.Getenv("SUBROUTER_CACHE_DIR"); p != "" {
-		return p
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".cache/subrouterctl"
-	}
-	return filepath.Join(home, ".cache", "subrouterctl")
+	return config.DefaultCacheDir()
 }
 
 // cacheDB is the SQLite cache database for this invocation.
@@ -327,42 +317,7 @@ func (l *listFlags) applyPage[T any](items []T) []T {
 //
 // Accepted forms: 2026-01-31, 2026-01-31T15:04:05Z, 1738281600, 24h, 7d.
 func parseTimeFlag(s string, endOfDay bool) (int64, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, nil
-	}
-	if strings.EqualFold(s, "now") {
-		return time.Now().Unix(), nil
-	}
-	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return n, nil
-	}
-	if strings.HasSuffix(s, "d") || strings.HasSuffix(s, "h") || strings.HasSuffix(s, "m") {
-		unit := s[len(s)-1]
-		n, err := strconv.Atoi(s[:len(s)-1])
-		if err != nil {
-			return 0, fmt.Errorf("cannot parse time %q", s)
-		}
-		now := time.Now()
-		switch unit {
-		case 'd':
-			return now.AddDate(0, 0, -n).Unix(), nil
-		case 'h':
-			return now.Add(-time.Duration(n) * time.Hour).Unix(), nil
-		case 'm':
-			return now.Add(-time.Duration(n) * time.Minute).Unix(), nil
-		}
-	}
-	if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
-		if endOfDay {
-			t = t.Add(24*time.Hour - time.Second)
-		}
-		return t.Unix(), nil
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.Unix(), nil
-	}
-	return 0, fmt.Errorf("cannot parse time %q: use 2026-01-31, 24h or a unix timestamp", s)
+	return api.ParseTime(s, endOfDay)
 }
 
 // timeFlags are the shared date range flags.
@@ -406,51 +361,14 @@ func splitList(s string) []string {
 }
 
 // concurrentPages fetches pages in parallel with a bounded worker pool.
-// fetch returns the rows of one page and the total row count.
 func concurrentPages[T any](ctx context.Context, pages, workers int, fetch func(context.Context, int) ([]T, int, error)) ([]T, error) {
-	if pages <= 0 {
-		return nil, nil
-	}
-	if workers < 1 {
-		workers = 1
-	}
-	rows := make([][]T, pages)
-	errs := make(chan error, pages)
-	sem := make(chan struct{}, workers)
-	var wg sync.WaitGroup
-	for p := 1; p <= pages; p++ {
-		wg.Add(1)
-		go func(page int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			got, _, err := fetch(ctx, page)
-			if err != nil {
-				errs <- err
-				return
-			}
-			rows[page-1] = got
-		}(p)
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			return nil, err
-		}
-	}
-	var all []T
-	for _, r := range rows {
-		all = append(all, r...)
-	}
-	return all, nil
+	return api.ConcurrentPages(ctx, pages, workers, fetch)
 }
 
 // startOfToday is the midnight the platform uses when no start time is
 // given for a log query.
 func startOfToday() int64 {
-	y, m, d := time.Now().Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.Local).Unix()
+	return api.StartOfToday()
 }
 
 // apiLogQuery builds a log query from the shared date and list flags.

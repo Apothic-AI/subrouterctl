@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apothic-AI/subrouterctl/internal/cache"
+	"github.com/Apothic-AI/subrouterctl/pkg/cache"
 )
 
 // logServer serves usage logs inside the window it is asked for.

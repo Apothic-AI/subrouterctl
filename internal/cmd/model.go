@@ -96,7 +96,7 @@ func fetchModels(ctx context.Context, cl *api.Client, lf listFlags, category str
 		pages = (first.Total + size - 1) / size
 	}
 	if pages > 1 {
-		rest, err := concurrentPages(ctx, pages-1, 8, func(ctx context.Context, page int) ([]api.MarketplaceModel, int, error) {
+		rest, err := concurrentPages(ctx, pages-1, 4, func(ctx context.Context, page int) ([]api.MarketplaceModel, int, error) {
 			p := q
 			p.Page = page + 1
 			res, err := cl.ListMarketplaceModels(ctx, p)

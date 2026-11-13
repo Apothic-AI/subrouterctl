@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -238,6 +241,12 @@ func (q LogQuery) Signature() string {
 	}, "\x00")
 }
 
+// logSignature identifies a log query inside the cache. It adds the scope of
+// the account, so the logs of one account are never served to another.
+func (c *Client) logSignature(q LogQuery) string {
+	return c.Scope() + "|" + q.Signature()
+}
+
 // GetLogs returns a page of usage logs (GET /api/log/self).
 func (c *Client) GetLogs(ctx context.Context, q LogQuery) (*LogPage, error) {
 	var p LogPage
@@ -285,6 +294,9 @@ const maxLogSpan = 30 * 24 * 60 * 60
 // never ends from looping forever.
 const maxLogPages = 2000
 
+// MaxLogPageSize is the largest page the log endpoint serves.
+const MaxLogPageSize = 100
+
 // GetLogRange returns every log row that falls inside the requested window.
 //
 // The parts of the window that the range store already holds are served from
@@ -294,7 +306,7 @@ func (c *Client) GetLogRange(ctx context.Context, q LogQuery) ([]LogEntry, error
 	if c.LogRanges == nil || !c.LogRanges.Enabled() || q.StartTimestamp <= 0 || q.EndTimestamp <= 0 {
 		return nil, nil
 	}
-	sig := q.Signature()
+	sig := c.logSignature(q)
 	spans := c.LogRanges.Missing(sig, q.StartTimestamp, q.EndTimestamp)
 
 	// The gaps are cut into chunks that are fetched side by side, so a
@@ -318,21 +330,50 @@ func (c *Client) GetLogRange(ctx context.Context, q LogQuery) ([]LogEntry, error
 			}
 			continue
 		}
-		if err := c.LogRanges.Put(sig, cache.Window{Span: chunk, Rows: rows[i]}); err != nil {
-			return nil, err
+		if err := c.LogRanges.Put(sig, cache.Window{Span: chunk, Rows: rows[i]}); err != nil && fetchErr == nil {
+			// The rows were fetched, so they are shown even when they
+			// could not be written to the cache.
+			fetchErr = fmt.Errorf("cache the log range: %w", err)
 		}
 	}
 
+	// The rows that are shown are the ones on disk plus the ones that were
+	// just fetched, so a chunk that could not be written to the cache is
+	// still shown.
 	cached := c.LogRanges.Rows(sig, q.StartTimestamp, q.EndTimestamp)
 	out := make([]LogEntry, 0, len(cached))
-	for _, row := range cached {
+	seen := make(map[string]bool, len(cached))
+	add := func(row cache.Row) {
 		var e LogEntry
 		if err := json.Unmarshal(row.Data, &e); err != nil {
-			continue
+			return
 		}
+		key := logRowKey(e, row.Data)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
 		out = append(out, e)
 	}
+	for _, row := range cached {
+		add(row)
+	}
+	for _, chunkRows := range rows {
+		for _, row := range chunkRows {
+			add(row)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	return out, fetchErr
+}
+
+// logRowKey identifies a log row, so that the same row is not shown twice.
+func logRowKey(e LogEntry, raw []byte) string {
+	if e.RequestID == "" {
+		sum := sha256.Sum256(raw)
+		return strconv.FormatInt(e.CreatedAt, 10) + "\x00" + hex.EncodeToString(sum[:])[:16]
+	}
+	return strconv.FormatInt(e.CreatedAt, 10) + "\x00" + e.RequestID
 }
 
 // logChunkSeconds is the size of one parallel log fetch.

@@ -44,6 +44,10 @@ func newUsageLogsCommand() *cobra.Command {
 		Long: `List request logs. Filters are sent to the server; --search and --sort are
 applied locally, which makes --sort fetch every matching page first.
 
+The time range is cached. A range that was fetched before is served from
+disk, and only the parts of it that are missing are fetched from the
+platform, so a window that reaches into the present still shows new calls.
+
 The TPS column is the generation throughput the SubRouter console shows in
 the "Time/first word" column: the completion tokens divided by the request
 duration. It is only meaningful for streaming responses.
@@ -71,7 +75,7 @@ The server accepts a window of at most 31 days per request.`,
 				end = time.Now().Unix()
 			}
 			q := api.LogQuery{
-				PageSize:       lf.pageSize,
+				PageSize:       logPageSize(cmd, lf),
 				Type:           logType,
 				TokenName:      tokenName,
 				ModelName:      modelName,
@@ -90,7 +94,7 @@ The server accepts a window of at most 31 days per request.`,
 						return err
 					}
 					// The cached part of the range is still served.
-					w.Warn("part of the requested range could not be fetched: %v", err)
+					w.Warn("the requested range is incomplete: %v", err)
 				}
 			} else {
 				items, err = fetchLogPages(ctx, cl, q, lf)
@@ -140,6 +144,16 @@ The server accepts a window of at most 31 days per request.`,
 	f.StringVar(&requestID, "request", "", "filter by request id")
 	f.IntVar(&logType, "type", 0, "filter by log type (0 = all)")
 	return cmd
+}
+
+// logPageSize is the page size used to walk the logs. The platform serves at
+// most 100 rows per request, and a wide range is fetched in many requests,
+// so the largest page is used unless the operator asked for another one.
+func logPageSize(cmd *cobra.Command, lf listFlags) int {
+	if cmd.Flags().Changed("page-size") {
+		return lf.pageSize
+	}
+	return api.MaxLogPageSize
 }
 
 // fetchLogPages walks the cursor paging of the log endpoint.

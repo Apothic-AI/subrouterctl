@@ -144,7 +144,7 @@ func TestOpenCreatesTheDirectory(t *testing.T) {
 
 func TestOpenRemovesTheLegacyTextCache(t *testing.T) {
 	dir := t.TempDir()
-	legacy := filepath.Join(dir, "abcd.json")
+	legacy := filepath.Join(dir, "0123456789abcdef0123456789abcdef.json")
 	if err := os.WriteFile(legacy, []byte(`{}`), 0o600); err != nil {
 		t.Fatalf("write legacy file: %v", err)
 	}
@@ -162,6 +162,22 @@ func TestOpenRemovesTheLegacyTextCache(t *testing.T) {
 	}
 	if _, err := os.Stat(oldRanges); !os.IsNotExist(err) {
 		t.Error("the legacy ranges directory must be removed")
+	}
+}
+
+func TestOpenKeepsFilesItDoesNotOwn(t *testing.T) {
+	dir := t.TempDir()
+	other := filepath.Join(dir, "notes.json")
+	if err := os.WriteFile(other, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("a file the cache does not own must be left alone: %v", err)
 	}
 }
 
@@ -217,15 +233,19 @@ func TestStoreReadsUncompressedEntries(t *testing.T) {
 }
 
 func TestKeyIsStableAndDistinct(t *testing.T) {
-	a := Key("GET", "/api/marketplace/models", "page=1")
-	b := Key("GET", "/api/marketplace/models", "page=1")
-	c := Key("GET", "/api/marketplace/models", "page=2")
-	d := Key("GET", "/api/marketplace/providers", "page=1")
+	a := Key("scope", "GET", "/api/marketplace/models", "page=1")
+	b := Key("scope", "GET", "/api/marketplace/models", "page=1")
+	c := Key("scope", "GET", "/api/marketplace/models", "page=2")
+	d := Key("scope", "GET", "/api/marketplace/providers", "page=1")
+	e := Key("other", "GET", "/api/marketplace/models", "page=1")
 	if a != b {
 		t.Error("the same request must produce the same key")
 	}
 	if a == c || a == d {
 		t.Error("different requests must produce different keys")
+	}
+	if a == e {
+		t.Error("different scopes must produce different keys")
 	}
 	if len(a) != 32 {
 		t.Errorf("key length = %d, want 32", len(a))

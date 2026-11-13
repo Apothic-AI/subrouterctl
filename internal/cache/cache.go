@@ -23,9 +23,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -38,7 +37,6 @@ const DBName = "cache.db"
 type DB struct {
 	db   *sql.DB
 	path string
-	once sync.Once
 }
 
 // Open opens or creates the cache database in dir.
@@ -143,6 +141,9 @@ func (d *DB) migrate(db *sql.DB, schema string) error {
 }
 
 // removeLegacyFiles clears out the text file cache that came before SQLite.
+//
+// Only the files the old cache wrote are touched: a 32 character hex name
+// with a .json suffix. A cache directory that holds anything else keeps it.
 func (d *DB) removeLegacyFiles() {
 	dir := filepath.Dir(d.path)
 	entries, err := os.ReadDir(dir)
@@ -155,11 +156,14 @@ func (d *DB) removeLegacyFiles() {
 			_ = os.RemoveAll(filepath.Join(dir, name))
 			continue
 		}
-		if !e.IsDir() && strings.HasSuffix(name, ".json") {
+		if !e.IsDir() && legacyName.MatchString(name) {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
 }
+
+// legacyName matches the files the text file cache wrote.
+var legacyName = regexp.MustCompile(`^[0-9a-f]{32}\.json$`)
 
 // Close releases the database.
 func (d *DB) Close() error {
@@ -195,9 +199,13 @@ func (s *Store) Enabled() bool { return s != nil && s.DB != nil && s.DB.db != ni
 // Fresh reports whether a cached entry may be served on its own merits.
 func (s *Store) Fresh() bool { return s != nil && s.TTL > 0 }
 
-// Key derives a filesystem safe key from a request path and its query.
-func Key(method, path, query string) string {
-	sum := sha256.Sum256([]byte(method + " " + path + "?" + query))
+// Key derives a cache key from the scope of a request, its method, its path
+// and its query.
+//
+// The scope separates the accounts and the sites that share one cache
+// directory: a response for one account must never be served to another.
+func Key(scope, method, path, query string) string {
+	sum := sha256.Sum256([]byte(scope + "\x00" + method + " " + path + "?" + query))
 	return hex.EncodeToString(sum[:])[:32]
 }
 
@@ -218,7 +226,11 @@ func (s *Store) Get(key string) ([]byte, bool) {
 	if time.Since(time.Unix(storedAt, 0)) > s.TTL {
 		return nil, false
 	}
-	return decompress(body), true
+	out, err := decompress(body)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // GetAny returns a cached response regardless of its age. It is the offline
@@ -232,7 +244,11 @@ func (s *Store) GetAny(key string) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return decompress(body), true
+	out, err := decompress(body)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // Put stores a response with the current timestamp.
@@ -314,18 +330,18 @@ func compress(data []byte) []byte {
 
 // decompress restores a payload that compress wrote. Payloads that were
 // stored before compression existed are returned unchanged.
-func decompress(data []byte) []byte {
+func decompress(data []byte) ([]byte, error) {
 	if len(data) < 2 || data[0] != 0x1f || data[1] != 0x8b {
-		return data
+		return data, nil
 	}
 	r, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("cache: read compressed payload: %w", err)
 	}
 	defer r.Close()
 	out, err := io.ReadAll(r)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("cache: read compressed payload: %w", err)
 	}
-	return out
+	return out, nil
 }

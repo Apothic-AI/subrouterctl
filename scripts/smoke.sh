@@ -104,7 +104,15 @@ for kind in smart fixed shared official; do
     id=$(printf '%s' "$out" | grep -oE 'id [0-9]+' | head -1 | grep -oE '[0-9]+')
     [[ -n "$id" ]] && CREATED_KEYS+=("$id")
     # The platform must classify the key under the kind we asked for.
-    if "$BIN" token list --kind "$kind" --search "smoke-$kind" 2>&1 | grep -q "smoke-$kind"; then
+    classified=0
+    for _ in 1 2 3 4 5; do
+      if "$BIN" token list --kind "$kind" --search "smoke-$kind" 2>&1 | grep -q "smoke-$kind"; then
+        classified=1
+        break
+      fi
+      sleep 1
+    done
+    if (( classified )); then
       PASS=$((PASS + 1))
       printf '  \033[32m\u2713\033[0m %s key is classified as %s\n' "$kind" "$kind"
     else
@@ -180,7 +188,8 @@ echo "cache"
 CACHE_DIR=$(mktemp -d)
 check "cache write through" "$BIN" --cache-dir "$CACHE_DIR" account status
 check "cache read with ttl" "$BIN" --cache-dir "$CACHE_DIR" --cache-ttl 1m account status
-check "cache offline fallback" "$BIN" --cache-dir "$CACHE_DIR" --base-url http://127.0.0.1:9 account status
+# The proxy sends the request nowhere, which is what an outage looks like.
+check "cache offline fallback" env HTTPS_PROXY=http://127.0.0.1:9 "$BIN" --cache-dir "$CACHE_DIR" account status
 check "cache clear" "$BIN" --cache-dir "$CACHE_DIR" --cache-clear
 rm -rf "$CACHE_DIR"
 

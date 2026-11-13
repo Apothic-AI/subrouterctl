@@ -13,7 +13,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,6 +44,9 @@ type Client struct {
 	// CacheNotice is called when a response is served from the cache rather
 	// than from the network, so that the command layer can say so.
 	CacheNotice func(format string, a ...any)
+	// retryWait is how long the client waits before it tries a rate
+	// limited request again.
+	retryWait time.Duration
 }
 
 // New builds a client from resolved configuration.
@@ -200,7 +206,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, params Params, 
 	// The cache is written through on every request. It is read only when
 	// the caller asked for a time to live.
 	cacheable = cacheable && method == http.MethodGet && c.Cache.Enabled()
-	key := cache.Key(method, path, query)
+	key := cache.Key(c.Scope(), method, path, query)
 	if cacheable && c.Cache.Fresh() {
 		if body, ok := c.Cache.Get(key); ok {
 			return body, nil
@@ -229,8 +235,13 @@ func (c *Client) doRaw(ctx context.Context, method, path string, params Params, 
 		}
 	}
 
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.send(ctx, req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// The caller stopped the request. That is not a network
+			// failure, so the cache must not stand in for it.
+			return nil, fmt.Errorf("%s %s: %w", method, path, err)
+		}
 		// The network is unavailable. Fall back to whatever is on disk.
 		if cacheable {
 			if cached, ok := c.Cache.GetAny(key); ok {
@@ -266,6 +277,58 @@ func (c *Client) doRaw(ctx context.Context, method, path string, params Params, 
 		_ = c.Cache.Put(key, raw)
 	}
 	return raw, nil
+}
+
+// retryLimit is how many times a rate limited request is tried again.
+const retryLimit = 3
+
+// retryDelay is the wait before the first retry. Every further attempt
+// waits twice as long.
+const retryDelay = time.Second
+
+// send performs the request and retries it when the platform asks the
+// client to slow down.
+func (c *Client) send(ctx context.Context, req *http.Request) (*http.Response, error) {
+	wait := c.retryWait
+	if wait <= 0 {
+		wait = retryDelay
+	}
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			// The body was consumed by the previous attempt.
+			if req.GetBody != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return nil, fmt.Errorf("rebuild request body: %w", err)
+				}
+				req.Body = body
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			wait *= 2
+		}
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusTooManyRequests || attempt >= retryLimit {
+			return resp, nil
+		}
+		// The platform is rate limiting this client. Wait and try again.
+		resp.Body.Close()
+	}
+}
+
+// Scope identifies the site and the account a request belongs to.
+//
+// The cache is shared by every account that uses the same cache directory,
+// so the scope keeps their responses apart.
+func (c *Client) Scope() string {
+	sum := sha256.Sum256([]byte(c.AccessToken + "\x00" + c.APIKey))
+	return c.BaseURL + "|" + strconv.Itoa(c.UserID) + "|" + hex.EncodeToString(sum[:])[:8]
 }
 
 // NoticeCache tells the caller that a response came from the cache instead

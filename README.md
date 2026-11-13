@@ -271,6 +271,10 @@ subrouterctl usage data  --from 7d  --to now
 
 The platform refuses windows longer than 31 days.
 
+The range of a log listing is cached, so a window that was fetched before
+comes back from disk the next time. Only the parts of the window that are
+missing are fetched from the platform.
+
 ---
 
 ## Command map
@@ -507,7 +511,7 @@ The smoke test creates and removes a few throwaway API keys, so it needs a
 real system access token. It restores the account to its original state.
 
 ```
-passed 65, failed 0
+passed 67, failed 0
 ```
 
 ---

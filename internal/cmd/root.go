@@ -63,15 +63,23 @@ token. No browser is needed after the one time device authorization.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// --cache-clear is a standalone action.
-			if flagCacheClear {
-				if err := newCacheStore().Clear(); err != nil {
-					return err
-				}
-				fmt.Println("cache cleared")
-				return nil
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			// --cache-clear is a standalone action: it empties the cache
+			// and stops, whatever command was asked for.
+			if !flagCacheClear {
+				return
 			}
+			if err := newCacheStore().Clear(); err != nil {
+				fmt.Fprintln(os.Stderr, "subrouterctl:", err)
+				os.Exit(1)
+			}
+			if cacheDB != nil {
+				_ = cacheDB.Close()
+			}
+			fmt.Println("cache cleared")
+			os.Exit(0)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
 	}

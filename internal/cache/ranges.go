@@ -21,7 +21,7 @@ func NewRangeStore(db *DB) *RangeStore { return &RangeStore{DB: db} }
 // Enabled reports whether the store can hold entries.
 func (s *RangeStore) Enabled() bool { return s != nil && s.DB != nil && s.DB.db != nil }
 
-// Span is a half open interval of unix seconds.
+// Span is a stretch of unix seconds. Both ends are included.
 type Span struct {
 	From int64 `json:"from"`
 	To   int64 `json:"to"`
@@ -90,7 +90,11 @@ func (s *RangeStore) Rows(signature string, from, to int64) []Row {
 		if err := rows.Scan(&r.CreatedAt, &data); err != nil {
 			continue
 		}
-		r.Data = decompress(data)
+		body, err := decompress(data)
+		if err != nil {
+			continue
+		}
+		r.Data = body
 		out = append(out, r)
 	}
 	return out

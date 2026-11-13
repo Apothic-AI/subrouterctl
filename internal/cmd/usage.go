@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -61,6 +62,14 @@ The server accepts a window of at most 31 days per request.`,
 			if err != nil {
 				return err
 			}
+			// The range cache needs explicit bounds, so fall back to the
+			// platform defaults of today when the operator gave none.
+			if start == 0 {
+				start = startOfToday()
+			}
+			if end == 0 {
+				end = time.Now().Unix()
+			}
 			q := api.LogQuery{
 				PageSize:       lf.pageSize,
 				Type:           logType,
@@ -72,12 +81,29 @@ The server accepts a window of at most 31 days per request.`,
 				EndTimestamp:   end,
 			}
 
-			items, err := fetchLogPages(ctx, cl, q, lf)
-			if err != nil {
-				return err
+			var items []api.LogEntry
+			ranged := cl.LogRanges != nil && cl.LogRanges.Enabled()
+			if ranged {
+				items, err = cl.GetLogRange(ctx, q)
+				if err != nil {
+					if len(items) == 0 {
+						return err
+					}
+					// The cached part of the range is still served.
+					w.Warn("part of the requested range could not be fetched: %v", err)
+				}
+			} else {
+				items, err = fetchLogPages(ctx, cl, q, lf)
+				if err != nil {
+					return err
+				}
 			}
 			items = api.FilterLogs(items, lf.search)
 			api.SortLogs(items, lf.sort, lf.desc())
+			if ranged {
+				// The whole range is in memory, so the page is picked here.
+				items = lf.applyPage(items)
+			}
 			if w.IsStructured() {
 				return w.Structured(items)
 			}

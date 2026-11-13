@@ -41,7 +41,11 @@ var Version = "1.0.0"
 
 // Execute runs the root command.
 func Execute() error {
-	return NewRootCommand().Execute()
+	err := NewRootCommand().Execute()
+	if cacheDB != nil {
+		_ = cacheDB.Close()
+	}
+	return err
 }
 
 // NewRootCommand builds the command tree.
@@ -83,7 +87,7 @@ token. No browser is needed after the one time device authorization.`,
 	pf.Float64Var(&flagQuotaPerUnit, "quota-per-unit", 0, "quota units per 1 USD (default 500000)")
 	pf.BoolVar(&flagShowSecrets, "show-secrets", false, "print secret values in full instead of masking them")
 	pf.BoolVarP(&flagYes, "yes", "y", false, "assume yes for confirmation prompts")
-	pf.DurationVar(&flagCacheTTL, "cache-ttl", 0, "serve public directory responses from the on-disk cache for this long (0 disables the cache)")
+	pf.DurationVar(&flagCacheTTL, "cache-ttl", 0, "serve cached responses when they are younger than this (0 always reads live, except for cached log ranges)")
 	pf.StringVar(&flagCacheDir, "cache-dir", defaultCacheDir(), "directory for the on-disk cache")
 	pf.BoolVar(&flagCacheClear, "cache-clear", false, "remove every cached entry and exit")
 
@@ -124,9 +128,30 @@ func defaultCacheDir() string {
 	return filepath.Join(home, ".cache", "subrouterctl")
 }
 
+// cacheDB is the SQLite cache database for this invocation.
+var cacheDB *cache.DB
+
+// openCacheDB opens the cache database once per invocation. A database that
+// cannot be opened is not fatal: the command simply runs without a cache.
+func openCacheDB() *cache.DB {
+	if cacheDB != nil {
+		return cacheDB
+	}
+	dir := flagCacheDir
+	if dir == "" {
+		dir = defaultCacheDir()
+	}
+	db, err := cache.Open(dir)
+	if err != nil {
+		return nil
+	}
+	cacheDB = db
+	return db
+}
+
 // newCacheStore builds the on-disk cache store for this invocation.
 func newCacheStore() *cache.Store {
-	return cache.New(flagCacheDir, flagCacheTTL)
+	return cache.New(openCacheDB(), flagCacheTTL)
 }
 
 // client builds an API client and verifies the management credential pair.
@@ -140,6 +165,10 @@ func client() (*api.Client, *config.Config, error) {
 	}
 	cl := api.New(c.BaseURL, c.AccessToken, c.UserID, c.APIKey, time.Duration(c.Timeout)*time.Second)
 	cl.Cache = newCacheStore()
+	cl.LogRanges = cache.NewRangeStore(openCacheDB())
+	cl.CacheNotice = func(format string, a ...any) {
+		writer().Warn(format, a...)
+	}
 	return cl, c, nil
 }
 
@@ -152,7 +181,12 @@ func relayClient() (*api.Client, *config.Config, error) {
 	if err := c.RequireRelayAuth(); err != nil {
 		return nil, nil, err
 	}
-	return api.New(c.BaseURL, c.AccessToken, c.UserID, c.APIKey, time.Duration(c.Timeout)*time.Second), c, nil
+	cl := api.New(c.BaseURL, c.AccessToken, c.UserID, c.APIKey, time.Duration(c.Timeout)*time.Second)
+	cl.Cache = newCacheStore()
+	cl.CacheNotice = func(format string, a ...any) {
+		writer().Warn(format, a...)
+	}
+	return cl, c, nil
 }
 
 // writer builds the output writer.
@@ -175,9 +209,13 @@ func writer() *render.Writer {
 	return render.New(opts)
 }
 
-// ctx returns a request context bounded by the timeout flag.
+// ctx returns the context for a command.
+//
+// The timeout flag bounds a single request, not the whole command, so that
+// a command which walks many pages (a wide log range, the model directory)
+// is not cut off half way through.
 func ctx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), time.Duration(flagTimeout)*time.Second)
+	return context.WithCancel(context.Background())
 }
 
 // confirm asks the operator to approve a destructive action.
@@ -227,6 +265,23 @@ func (l *listFlags) applyLimit[T any](items []T) []T {
 		return items[:l.limit]
 	}
 	return items
+}
+
+// applyPage trims a slice to the requested page and limit. It is used when
+// the whole result set is already in memory, where the server cannot do the
+// paging.
+func (l *listFlags) applyPage[T any](items []T) []T {
+	if l.limit <= 0 {
+		return items
+	}
+	if l.page > 1 {
+		start := (l.page - 1) * l.limit
+		if start >= len(items) {
+			return nil
+		}
+		items = items[start:]
+	}
+	return l.applyLimit(items)
 }
 
 // parseTimeFlag parses a date, timestamp or relative age into unix seconds.
@@ -350,6 +405,13 @@ func concurrentPages[T any](ctx context.Context, pages, workers int, fetch func(
 		all = append(all, r...)
 	}
 	return all, nil
+}
+
+// startOfToday is the midnight the platform uses when no start time is
+// given for a log query.
+func startOfToday() int64 {
+	y, m, d := time.Now().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.Local).Unix()
 }
 
 // apiLogQuery builds a log query from the shared date and list flags.

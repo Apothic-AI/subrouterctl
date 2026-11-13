@@ -177,8 +177,12 @@ check "task list filtered" "$BIN" task list --search x --limit 5
 
 echo
 echo "cache"
-check "cache round trip" "$BIN" --cache-ttl 1m model list --limit 3
-check "cache clear" "$BIN" --cache-clear
+CACHE_DIR=$(mktemp -d)
+check "cache write through" "$BIN" --cache-dir "$CACHE_DIR" account status
+check "cache read with ttl" "$BIN" --cache-dir "$CACHE_DIR" --cache-ttl 1m account status
+check "cache offline fallback" "$BIN" --cache-dir "$CACHE_DIR" --base-url http://127.0.0.1:9 account status
+check "cache clear" "$BIN" --cache-dir "$CACHE_DIR" --cache-clear
+rm -rf "$CACHE_DIR"
 
 echo
 echo "output formats"

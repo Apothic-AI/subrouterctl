@@ -4,6 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/Apothic-AI/subrouterctl/internal/cache"
 )
 
 // ---------------------------------------------------------------------------
@@ -225,13 +230,200 @@ type LogPage struct {
 	PageSize   int        `json:"page_size"`
 }
 
+// Signature identifies a log query by its filters, ignoring the time window.
+func (q LogQuery) Signature() string {
+	return strings.Join([]string{
+		strconv.Itoa(q.Type),
+		q.TokenName, q.ModelName, q.Username, q.Group, q.RequestID, q.UpstreamRequestID,
+	}, "\x00")
+}
+
 // GetLogs returns a page of usage logs (GET /api/log/self).
 func (c *Client) GetLogs(ctx context.Context, q LogQuery) (*LogPage, error) {
 	var p LogPage
-	if err := c.Get(ctx, "/api/log/self/", q.Params(), &p); err != nil {
+	if err := c.Get(ctx, "/api/log/self", q.Params(), &p); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// logPageRaw is one page of usage logs with the items left as raw JSON, so
+// that nothing is lost when a page is filed in the cache.
+type logPageRaw struct {
+	items      []json.RawMessage
+	hasMore    bool
+	nextCursor string
+}
+
+// getLogPageRaw fetches one page of raw log items.
+//
+// The request skips the key/value cache: the range store owns the log rows,
+// and a page that was served from the key/value cache would file a stale
+// range as if it had been fetched.
+func (c *Client) getLogPageRaw(ctx context.Context, q LogQuery) (logPageRaw, error) {
+	raw, err := c.doRaw(ctx, "GET", "/api/log/self", q.Params(), nil, AuthManagement, false)
+	if err != nil {
+		return logPageRaw{}, err
+	}
+	var env struct {
+		Data struct {
+			Items      []json.RawMessage `json:"items"`
+			HasMore    bool              `json:"has_more"`
+			NextCursor string            `json:"next_cursor"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return logPageRaw{}, err
+	}
+	return logPageRaw{env.Data.Items, env.Data.HasMore, env.Data.NextCursor}, nil
+}
+
+// maxLogSpan is the longest window the platform accepts in one log request.
+const maxLogSpan = 30 * 24 * 60 * 60
+
+// maxLogPages is the page limit for one log range. It keeps a cursor that
+// never ends from looping forever.
+const maxLogPages = 2000
+
+// GetLogRange returns every log row that falls inside the requested window.
+//
+// The parts of the window that the range store already holds are served from
+// disk. The parts it does not hold are fetched from the API and added, so a
+// cached range never hides newer rows.
+func (c *Client) GetLogRange(ctx context.Context, q LogQuery) ([]LogEntry, error) {
+	if c.LogRanges == nil || !c.LogRanges.Enabled() || q.StartTimestamp <= 0 || q.EndTimestamp <= 0 {
+		return nil, nil
+	}
+	sig := q.Signature()
+	spans := c.LogRanges.Missing(sig, q.StartTimestamp, q.EndTimestamp)
+
+	// The gaps are cut into chunks that are fetched side by side, so a
+	// wide range does not turn into one long serial walk.
+	var chunks []cache.Span
+	for _, span := range spans {
+		chunks = append(chunks, chunkSpan(span, logChunkSeconds)...)
+	}
+	rows, errs := fetchLogChunks(ctx, chunks, func(ctx context.Context, sp cache.Span) ([]cache.Row, error) {
+		return c.fetchLogSpan(ctx, q, sp.From, sp.To)
+	})
+
+	// A chunk that cannot be fetched does not invalidate the chunks that
+	// can. The rows already on disk are still served, and the failure is
+	// reported so the caller can warn about the gap.
+	var fetchErr error
+	for i, chunk := range chunks {
+		if errs[i] != nil {
+			if fetchErr == nil {
+				fetchErr = errs[i]
+			}
+			continue
+		}
+		if err := c.LogRanges.Put(sig, cache.Window{Span: chunk, Rows: rows[i]}); err != nil {
+			return nil, err
+		}
+	}
+
+	cached := c.LogRanges.Rows(sig, q.StartTimestamp, q.EndTimestamp)
+	out := make([]LogEntry, 0, len(cached))
+	for _, row := range cached {
+		var e LogEntry
+		if err := json.Unmarshal(row.Data, &e); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, fetchErr
+}
+
+// logChunkSeconds is the size of one parallel log fetch.
+const logChunkSeconds = 24 * 60 * 60
+
+// logWorkers is how many log chunks are fetched at the same time.
+const logWorkers = 6
+
+// fetchLogChunks fetches the chunks of a log range side by side with a
+// bounded worker pool. Every chunk keeps its own result and error, so one
+// failing chunk does not lose the others.
+func fetchLogChunks(ctx context.Context, chunks []cache.Span, fetch func(context.Context, cache.Span) ([]cache.Row, error)) ([][]cache.Row, []error) {
+	rows := make([][]cache.Row, len(chunks))
+	errs := make([]error, len(chunks))
+	if len(chunks) == 0 {
+		return rows, errs
+	}
+	workers := logWorkers
+	if workers > len(chunks) {
+		workers = len(chunks)
+	}
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i := range chunks {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			rows[i], errs[i] = fetch(ctx, chunks[i])
+		}(i)
+	}
+	wg.Wait()
+	return rows, errs
+}
+
+// fetchLogSpan downloads every log row inside a time span.
+func (c *Client) fetchLogSpan(ctx context.Context, q LogQuery, from, to int64) ([]cache.Row, error) {
+	var rows []cache.Row
+	cursor := "first"
+	pages := 0
+	for {
+		qq := q
+		qq.Cursor = cursor
+		qq.StartTimestamp = from
+		qq.EndTimestamp = to
+		page, err := c.getLogPageRaw(ctx, qq)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range page.items {
+			var probe struct {
+				CreatedAt int64 `json:"created_at"`
+			}
+			if err := json.Unmarshal(item, &probe); err != nil {
+				continue
+			}
+			if probe.CreatedAt < from || probe.CreatedAt > to {
+				continue
+			}
+			rows = append(rows, cache.Row{CreatedAt: probe.CreatedAt, Data: item})
+		}
+		if !page.hasMore || page.nextCursor == "" {
+			break
+		}
+		cursor = page.nextCursor
+		pages++
+		if pages >= maxLogPages {
+			// A cursor that never ends would otherwise loop forever.
+			return rows, fmt.Errorf("stopped after %d pages of logs in the range %d to %d", maxLogPages, from, to)
+		}
+	}
+	return rows, nil
+}
+
+// chunkSpan splits a span into pieces the platform will accept.
+func chunkSpan(s cache.Span, max int64) []cache.Span {
+	if s.To <= s.From {
+		return nil
+	}
+	var out []cache.Span
+	from := s.From
+	for from < s.To {
+		to := from + max
+		if to > s.To {
+			to = s.To
+		}
+		out = append(out, cache.Span{From: from, To: to})
+		from = to
+	}
+	return out
 }
 
 // GetLogStat returns the usage summary (GET /api/log/self/stat).

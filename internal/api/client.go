@@ -32,8 +32,15 @@ type Client struct {
 	UserID      int
 	APIKey      string
 	HTTP        *http.Client
-	// Cache holds public directory responses when the caller opts in.
+	// Cache holds API responses. It is written through on every request and
+	// read only when the caller sets a time to live or the network fails.
 	Cache *cache.Store
+	// LogRanges holds usage log rows together with the time ranges they
+	// cover, so a cached range can be served without a round trip.
+	LogRanges *cache.RangeStore
+	// CacheNotice is called when a response is served from the cache rather
+	// than from the network, so that the command layer can say so.
+	CacheNotice func(format string, a ...any)
 }
 
 // New builds a client from resolved configuration.
@@ -165,7 +172,16 @@ func (c *Client) Do(ctx context.Context, method, path string, params Params, bod
 }
 
 // DoRaw performs a request and returns the raw response body.
+//
+// The response is written through to the key/value cache. It is read back
+// from there only when a time to live is set, or when the network is down.
 func (c *Client) DoRaw(ctx context.Context, method, path string, params Params, body any, mode AuthMode) ([]byte, error) {
+	return c.doRaw(ctx, method, path, params, body, mode, true)
+}
+
+// doRaw performs a request. When cacheable is false the request skips the
+// key/value cache entirely, because another store owns that payload.
+func (c *Client) doRaw(ctx context.Context, method, path string, params Params, body any, mode AuthMode, cacheable bool) ([]byte, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -181,11 +197,11 @@ func (c *Client) DoRaw(ctx context.Context, method, path string, params Params, 
 		target += query
 	}
 
-	// Public directory responses can be served from disk when the caller
-	// opts in. Account state is never cached.
-	cacheable := method == http.MethodGet && c.Cache.Enabled() && isCacheable(path)
+	// The cache is written through on every request. It is read only when
+	// the caller asked for a time to live.
+	cacheable = cacheable && method == http.MethodGet && c.Cache.Enabled()
 	key := cache.Key(method, path, query)
-	if cacheable {
+	if cacheable && c.Cache.Fresh() {
 		if body, ok := c.Cache.Get(key); ok {
 			return body, nil
 		}
@@ -215,6 +231,13 @@ func (c *Client) DoRaw(ctx context.Context, method, path string, params Params, 
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		// The network is unavailable. Fall back to whatever is on disk.
+		if cacheable {
+			if cached, ok := c.Cache.GetAny(key); ok {
+				c.NoticeCache("served %s %s from the local cache because the network is unavailable", method, path)
+				return cached, nil
+			}
+		}
 		return nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
@@ -245,26 +268,12 @@ func (c *Client) DoRaw(ctx context.Context, method, path string, params Params, 
 	return raw, nil
 }
 
-// cacheablePaths are the public, slow to fetch directory endpoints that may
-// be served from the on-disk cache. Everything else is always live.
-var cacheablePaths = []string{
-	"/api/marketplace/models",
-	"/api/marketplace/providers",
-	"/api/marketplace/model-options",
-	"/api/marketplace/shared-models",
-	"/api/marketplace/shared-providers",
-	"/api/pricing",
-	"/api/status",
-}
-
-// isCacheable reports whether a path may be served from the cache.
-func isCacheable(path string) bool {
-	for _, p := range cacheablePaths {
-		if path == p || strings.HasPrefix(path, p+"/") {
-			return true
-		}
+// NoticeCache tells the caller that a response came from the cache instead
+// of from the network, so that it can be reported to the user.
+func (c *Client) NoticeCache(format string, a ...any) {
+	if c.CacheNotice != nil {
+		c.CacheNotice(fmt.Sprintf(format, a...))
 	}
-	return false
 }
 
 // extractMessage pulls a human readable reason out of an error body.

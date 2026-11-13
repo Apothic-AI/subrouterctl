@@ -369,30 +369,66 @@ same field names as the platform's own API.
 
 ## Caching
 
-By default nothing is cached. Every command reads live data, so a balance is
-never stale and a key list never lies about a key.
+Every response is written through to a local SQLite database the moment it
+arrives, so the cache is always warm. Where a response is *read from* is a
+separate decision:
 
-The public directories are slow to fetch. The model directory holds around
-2100 models spread over 43 pages, and a sorted listing needs all of them. When
-you would rather have speed than freshness, opt in:
+| Situation                                     | Where the data comes from   |
+| --------------------------------------------- | ---------------------------- |
+| A normal run                                  | The network, always          |
+| `--cache-ttl 5m` and the entry is that fresh  | The cache                    |
+| The network is down                           | The cache, with a warning    |
+| Usage logs                                    | The cache, see below         |
 
-```bash
-subrouterctl --cache-ttl 5m model list --sort price --order desc
+Nothing is ever served stale without either `--cache-ttl` or a dead network,
+and the offline fallback always says so:
+
+```console
+$ subrouterctl --base-url http://127.0.0.1:9 account status
+! served GET /api/status from the local cache because the network is unavailable
+Site
+────────
+Name            SubRouter
+…
 ```
 
-| Flag            | Meaning                                                                  |
-| --------------- | ------------------------------------------------------------------------ |
-| `--cache-ttl`   | Serve public directory responses from disk for this long. `0` disables it. |
-| `--cache-dir`   | Where the cache lives. Default `~/.cache/subrouterctl`.                   |
-| `--cache-clear` | Remove every cached entry and exit.                                      |
+### Usage logs are the exception
 
-Only the public marketplace responses are ever cached: the model directory, the
-provider directory, the price sheet and the site configuration. Your account,
-your keys, your balances, your logs and your tasks are always fetched live.
+A log listing names a time range, so the cache keeps the rows together with
+the range of time they cover. A range that is already cached is drawn from
+disk, and only the parts that are missing are fetched:
 
-A sorted listing needs every page, so those pages are now requested in
-parallel. The full 2100 model sort went from about 50 seconds to under 10,
-and a warm cache brings it down to a second.
+```bash
+subrouterctl usage logs --from 7d      # fetches the range it does not have
+subrouterctl usage logs --from 7d      # instant: the range is covered
+```
+
+A range that reaches into the present always keeps a fresh tail, so new calls
+still show up. When a range cannot be fetched, the cached rows are still
+shown and the gap is reported:
+
+```console
+$ subrouterctl usage logs --from 7d
+! part of the requested range could not be fetched: GET /api/log/self: …
+```
+
+Wide ranges are fetched in parallel chunks, so a week of logs takes a couple
+of minutes the first time and a second afterwards.
+
+| Flag            | Meaning                                                          |
+| --------------- | ---------------------------------------------------------------- |
+| `--cache-ttl`   | Serve cached responses younger than this. `0` reads live data.   |
+| `--cache-dir`   | Where the cache lives. Default `~/.cache/subrouterctl`.          |
+| `--cache-clear` | Remove every cached entry and exit.                              |
+
+The cache lives in `~/.cache/subrouterctl/cache.db`, a SQLite database with
+mode `0600`. Payloads are compressed, so a week of logs takes tens of
+megabytes instead of hundreds.
+
+The public directories are slow to fetch. The model directory holds around
+2100 models spread over 43 pages, and a sorted listing needs all of them.
+Those pages are requested in parallel: the full 2100 model sort went from
+about 50 seconds to under 10, and a warm cache brings it down to a second.
 
 ## Credentials
 
@@ -425,7 +461,7 @@ export SUBROUTER_BASE_URL=https://subrouter.ai
 | `--api-key`        | `SUBROUTER_API_KEY`     | `sk-` relay key                    |
 | `--quota-per-unit` | `SUBROUTER_QUOTA_PER_UNIT` | Quota units per 1 USD (500000)  |
 | `--show-secrets`   | –                       | Print secrets in full              |
-| `--cache-ttl`      | –                       | Cache public directory responses   |
+| `--cache-ttl`      | –                       | Serve cached responses younger than this |
 | `--cache-dir`      | `SUBROUTER_CACHE_DIR`   | Where the cache lives               |
 | `--no-color`       | –                       | Plain output                       |
 | `--timeout`        | –                       | Request timeout in seconds         |

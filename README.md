@@ -298,6 +298,7 @@ subrouterctl
 └── station         self · dashboard · models · global-models · packages
                     customers · key-groups · shared · official-channels
                     logs · earnings
+└── bridge          the machine interface, on stdin and stdout
 ```
 
 `merchant` and `station` cover the provider (商家) and distributor (分站站长)
@@ -489,6 +490,40 @@ most common mistake:
 
 ---
 
+## Python and TypeScript
+
+The same account, from a program. Two packages in [`packages/`](packages) call
+the Go library this tool is built on, so the cache, the retries and the
+credential handling are the ones of the tool rather than a second copy of
+them.
+
+```python
+from subrouterctl import SubRouterClient
+
+client = SubRouterClient()
+print(client.account.info()["username"])
+
+for log in client.usage.logs(from_="24h", model="gpt-5", limit=10):
+    print(log["created_at"], log["model_name"], log["quota"])
+```
+
+```ts
+import { SubRouterClient } from "subrouterctl";
+
+const client = new SubRouterClient();
+const info = await client.account.info();
+console.log(info.username);
+```
+
+Neither package shells out to the CLI and neither one re-implements the API.
+They speak a small JSON protocol to the Go library: Python loads it in
+process over a C ABI, TypeScript talks to it over a pipe. See
+[`packages/README.md`](packages/README.md) for the protocol and
+[`packages/python`](packages/python) and
+[`packages/typescript`](packages/typescript) for the two APIs.
+
+---
+
 ## Safety
 
 - Secrets are masked in every table by default. `--show-secrets` reveals them.
@@ -509,6 +544,9 @@ make test      # unit tests
 make smoke     # live smoke test against your account
 make lint      # gofmt + go vet
 make help      # list every make target
+
+make bindings      # the shared library the Python binding loads
+make test-bindings # the Python and TypeScript tests
 ```
 
 The smoke test creates and removes a few throwaway API keys, so it needs a

@@ -360,7 +360,7 @@ func newTokenShowCommand() *cobra.Command {
 				{Label: "Key", Value: key},
 				{Label: "Group", Value: orDash(t.Group)},
 				{Label: "Provider", Value: orDash(t.ProviderSlug())},
-				{"Providers", orDash(strings.Join(t.Providers(), ", "))}, {"Models", orDash(strings.Join(t.Models(), ", "))}, {Label: "Route preference", Value: orDash(t.SubrouterRoutePreference)},
+				{Label: "Providers", Value: orDash(strings.Join(t.Providers(), ", "))}, {Label: "Models", Value: orDash(strings.Join(t.Models(), ", "))}, {Label: "Route preference", Value: orDash(t.SubrouterRoutePreference)},
 				{Label: "Sort mode", Value: orDash(t.SubrouterSortMode)},
 				{Label: "Include provider", Value: boolLabel(t.IncludeProviderSelf)},
 				{Label: "Include official", Value: boolLabel(t.IncludeOfficialChannels)},
@@ -368,13 +368,13 @@ func newTokenShowCommand() *cobra.Command {
 				{Label: "Include cache hit", Value: boolLabel(t.IncludeCacheHitRate)},
 				{Label: "Load balance", Value: boolLabel(t.LoadBalanceEnabled)},
 				{Label: "Cross group retry", Value: boolLabel(t.CrossGroupRetry)},
-				{"Official max discount", fmt.Sprintf("%g", t.OfficialKeyMaxDiscount)}, {"Shared max discount", fmt.Sprintf("%g", t.SharedSubscriptionMaxDisc)}, {Label: "Official channel", Value: strconv.Itoa(t.OfficialChannelID)},
+				{Label: "Official max discount", Value: fmt.Sprintf("%g", t.OfficialKeyMaxDiscount)}, {Label: "Shared max discount", Value: fmt.Sprintf("%g", t.SharedSubscriptionMaxDisc)}, {Label: "Official channel", Value: strconv.Itoa(t.OfficialChannelID)},
 				{Label: "Quota", Value: quota},
 				{Label: "Used", Value: w.Money(t.UsedQuota)},
 				{Label: "Expires", Value: expires},
 				{Label: "Allow IPs", Value: orDash(t.AllowIPs)},
 				{Label: "Created", Value: w.Time(t.CreatedTime)},
-				{"Last used", w.Age(t.AccessedTime)},
+				{Label: "Last used", Value: w.Age(t.AccessedTime)},
 			})
 			_ = c
 			return nil

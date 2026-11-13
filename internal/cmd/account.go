@@ -64,7 +64,7 @@ func newAccountInfoCommand() *cobra.Command {
 				{Label: "Requests", Value: strconv.FormatInt(int64(user.RequestCount), 10)},
 				{Label: "Referral code", Value: orDash(user.AffCode)},
 				{Label: "Referral quota", Value: w.Money(user.AffQuota)},
-				{"Created", w.Time(user.CreatedTime)},
+				{Label: "Created", Value: w.Time(user.CreatedTime)},
 			})
 			return nil
 		},
@@ -471,7 +471,7 @@ func newAccountAffCommand() *cobra.Command {
 				{Label: "Invites", Value: strconv.Itoa(invites)},
 				{Label: "Quota", Value: w.Money(quota)},
 				{Label: "Commission", Value: w.Money(commission)},
-				{"Invite link", orDash(summary.AffCode)},
+				{Label: "Invite link", Value: orDash(summary.AffCode)},
 			})
 			return nil
 		},
@@ -502,7 +502,7 @@ func newSiteStatusCommand() *cobra.Command {
 			w.Detail("Site", []render.Field{{Label: "Name", Value: orDash(status.SystemName)},
 				{Label: "Server", Value: orDash(status.ServerAddress)},
 				{Label: "Version", Value: orDash(status.Version)},
-				{"Quota per unit", fmt.Sprintf("%g", status.QuotaPerUnit)}, {"USD rate", fmt.Sprintf("%g", status.UsdExchangeRate)}, {"Async tasks", fmt.Sprintf("%v", status.EnableTask)},
+				{Label: "Quota per unit", Value: fmt.Sprintf("%g", status.QuotaPerUnit)}, {Label: "USD rate", Value: fmt.Sprintf("%g", status.UsdExchangeRate)}, {Label: "Async tasks", Value: fmt.Sprintf("%v", status.EnableTask)},
 			})
 			return nil
 		},

@@ -19,6 +19,7 @@ func newUsageCommand() *cobra.Command {
 	}
 	cmd.AddCommand(
 		newUsageLogsCommand(),
+		newUsageLogShowCommand(),
 		newUsageStatsCommand(),
 		newUsageDataCommand(),
 		newUsageExportCommand(),
@@ -33,6 +34,7 @@ func newUsageLogsCommand() *cobra.Command {
 		tokenName string
 		modelName string
 		group     string
+		requestID string
 		logType   int
 	)
 	cmd := &cobra.Command{
@@ -40,6 +42,10 @@ func newUsageLogsCommand() *cobra.Command {
 		Short: "List request logs",
 		Long: `List request logs. Filters are sent to the server; --search and --sort are
 applied locally, which makes --sort fetch every matching page first.
+
+The TPS column is the generation throughput the SubRouter console shows in
+the "Time/first word" column: the completion tokens divided by the request
+duration. It is only meaningful for streaming responses.
 
 The server accepts a window of at most 31 days per request.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -61,6 +67,7 @@ The server accepts a window of at most 31 days per request.`,
 				TokenName:      tokenName,
 				ModelName:      modelName,
 				Group:          group,
+				RequestID:      requestID,
 				StartTimestamp: start,
 				EndTimestamp:   end,
 			}
@@ -83,14 +90,17 @@ The server accepts a window of at most 31 days per request.`,
 					orDash(l.Group),
 					w.Money(l.Quota),
 					strconv.Itoa(l.PromptTokens + l.CompletionTokens),
-					fmt.Sprintf("%.1fs", l.UseTime),
+					fmt.Sprintf("%.1f", l.UseTime),
+					formatTTFT(l),
+					formatTPS(l),
 					orDash(l.RequestID),
 				})
 			}
 			w.Table([]render.Column{
 				{Title: "TIME"}, {Title: "KEY"}, {Title: "MODEL"}, {Title: "GROUP"},
 				{Title: "COST", Align: render.AlignRight}, {Title: "TOKENS", Align: render.AlignRight},
-				{Title: "TIME(s)", Align: render.AlignRight}, {Title: "REQUEST"},
+				{Title: "TIME(s)", Align: render.AlignRight}, {Title: "TTFT(s)", Align: render.AlignRight},
+				{Title: "TPS", Align: render.AlignRight}, {Title: "REQUEST"},
 			}, lf.applyLimit(rows))
 			return nil
 		},
@@ -101,6 +111,7 @@ The server accepts a window of at most 31 days per request.`,
 	f.StringVar(&tokenName, "key-name", "", "filter by API key name")
 	f.StringVar(&modelName, "model", "", "filter by model name")
 	f.StringVar(&group, "group", "", "filter by routing group")
+	f.StringVar(&requestID, "request", "", "filter by request id")
 	f.IntVar(&logType, "type", 0, "filter by log type (0 = all)")
 	return cmd
 }
@@ -174,7 +185,7 @@ func newUsageStatsCommand() *cobra.Command {
 			w.Detail("Usage", []render.Field{{Label: "Spend", Value: w.Money(stat.Quota)},
 				{Label: "Tokens", Value: strconv.FormatInt(int64(stat.Token), 10)},
 				{Label: "Requests per minute", Value: strconv.Itoa(stat.RPM)},
-				{"Tokens per minute", strconv.Itoa(stat.TPM)},
+				{Label: "Tokens per minute", Value: strconv.Itoa(stat.TPM)},
 			})
 			return nil
 		},
@@ -278,4 +289,95 @@ func newUsageExportCommand() *cobra.Command {
 	f.StringVar(&group, "group", "", "filter by routing group")
 	f.IntVar(&logType, "type", 0, "filter by log type (0 = all)")
 	return cmd
+}
+
+// formatTTFT renders the time to first token in seconds.
+func formatTTFT(l api.LogEntry) string {
+	if ms := l.FirstResponseTimeMs(); ms > 0 {
+		return fmt.Sprintf("%.1f", float64(ms)/1000)
+	}
+	return "-"
+}
+
+// formatTPS renders the generation throughput the way the SubRouter console
+// does: completion tokens over the total request duration, shown only for
+// streaming responses.
+func formatTPS(l api.LogEntry) string {
+	if !l.ShowsTPS() {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f", l.OutputTPS())
+}
+
+func newUsageLogShowCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "log <request-id>",
+		Short: "Show one log entry with every field the platform returned",
+		Long: `Show one usage log entry by its request id.
+
+The table view is a summary. This command prints every field the platform
+returned, including the full performance payload that the API sends in the
+"other" field.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cl, _, err := client()
+			if err != nil {
+				return err
+			}
+			w := writer()
+			ctx, cancel := ctx()
+			defer cancel()
+
+			q := api.LogQuery{RequestID: args[0], PageSize: 5}
+			page, err := cl.GetLogs(ctx, q)
+			if err != nil {
+				return err
+			}
+			if len(page.Items) == 0 {
+				return fmt.Errorf("no log entry with request id %q", args[0])
+			}
+			l := page.Items[0]
+			if w.IsStructured() {
+				return w.Structured(l)
+			}
+
+			w.Detail("Log "+l.RequestID, []render.Field{
+				{Label: "Id", Value: strconv.Itoa(l.ID)},
+				{Label: "Created", Value: w.Time(l.CreatedAt)},
+				{Label: "Type", Value: fmt.Sprintf("%d", l.Type)},
+				{Label: "User", Value: orDash(l.Username)},
+				{Label: "User id", Value: strconv.Itoa(l.UserID)},
+				{Label: "Key", Value: orDash(l.TokenName)},
+				{Label: "Key id", Value: strconv.Itoa(l.TokenID)},
+				{Label: "Model", Value: orDash(l.ModelName)},
+				{Label: "Group", Value: orDash(l.Group)},
+				{Label: "Channel", Value: orDash(l.ChannelName)},
+				{Label: "Node", Value: orDash(l.NodeName)},
+				{Label: "IP", Value: orDash(l.IP)},
+				{Label: "Prompt tokens", Value: strconv.Itoa(l.PromptTokens)},
+				{Label: "Completion tokens", Value: strconv.Itoa(l.CompletionTokens)},
+				{Label: "Duration", Value: fmt.Sprintf("%.1fs", l.UseTime)},
+				{Label: "Time to first token", Value: formatTTFT(l) + "s"},
+				{Label: "Throughput", Value: formatTPS(l) + " t/s"},
+				{Label: "Streaming", Value: boolLabel(l.IsStream)},
+				{Label: "Cost", Value: w.Money(l.Quota)},
+				{Label: "Request id", Value: orDash(l.RequestID)},
+				{Label: "Upstream request id", Value: orDash(l.UpstreamRequestID)},
+				{Label: "Content", Value: orDash(l.Content)},
+			})
+
+			if len(l.Other) == 0 {
+				return nil
+			}
+			w.Plain("")
+			w.Plain("  performance payload")
+			keys := render.SortedKeys(l.Other)
+			rows := make([][]string, 0, len(keys))
+			for _, k := range keys {
+				rows = append(rows, []string{k, fmt.Sprintf("%v", l.Other[k])})
+			}
+			w.Table([]render.Column{{Title: "FIELD"}, {Title: "VALUE"}}, rows)
+			return nil
+		},
+	}
 }

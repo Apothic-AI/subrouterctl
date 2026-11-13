@@ -47,7 +47,7 @@ func newSubscriptionListCommand() *cobra.Command {
 			}
 			w.Detail("Plans", []render.Field{{Label: "Active", Value: strconv.Itoa(len(state.Subscriptions))},
 				{Label: "All", Value: strconv.Itoa(len(state.AllSubscriptions))},
-				{"Billing preference", fmt.Sprintf("%v", state.BillingPreference)},
+				{Label: "Billing preference", Value: fmt.Sprintf("%v", state.BillingPreference)},
 			})
 			return nil
 		},

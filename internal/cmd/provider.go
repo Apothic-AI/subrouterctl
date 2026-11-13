@@ -404,7 +404,7 @@ func newProviderSubConfigCommand() *cobra.Command {
 				w.Detail("Auto-subscribe", []render.Field{{Label: "Enabled", Value: boolLabel(cfg.AutoSubscribeNew)},
 					{Label: "Eligible", Value: strconv.Itoa(cfg.EligibleCount)},
 					{Label: "Subscribed", Value: strconv.Itoa(cfg.SubscribedCount)},
-					{"Blacklisted", strconv.Itoa(cfg.BlacklistedCount)},
+					{Label: "Blacklisted", Value: strconv.Itoa(cfg.BlacklistedCount)},
 				})
 				return nil
 			}

@@ -113,10 +113,10 @@ func newTaskShowCommand() *cobra.Command {
 				{Label: "Action", Value: orDash(t.Action)},
 				{Label: "Model", Value: orDash(t.Model)},
 				{Label: "Status", Value: w.StatusColor(t.Status)},
-				{"Progress", fmt.Sprintf("%d%%", t.Progress)}, {Label: "Cost", Value: w.Money(float64(t.Quota))},
+				{Label: "Progress", Value: fmt.Sprintf("%d%%", t.Progress)}, {Label: "Cost", Value: w.Money(float64(t.Quota))},
 				{Label: "Created", Value: w.Time(t.CreatedAt)},
 				{Label: "Images", Value: strconv.Itoa(len(t.Result.Images))},
-				{"Videos", strconv.Itoa(len(t.Result.Videos))},
+				{Label: "Videos", Value: strconv.Itoa(len(t.Result.Videos))},
 			})
 			_ = c
 			return nil

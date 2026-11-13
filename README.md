@@ -144,6 +144,66 @@ subrouterctl usage logs --model deepseek --sort cost --order desc
 `--sort` is applied locally, so the CLI fetches every matching page first.
 Search is pushed to the server where the endpoint supports it.
 
+### Throughput
+
+The usage log carries the time to first token and the request duration, and
+`subrouterctl` shows the generation throughput the same way the SubRouter
+console does in its **Time/first word** column: the completion tokens divided
+by the total request duration.
+
+```bash
+$ subrouterctl usage logs --limit 3
+┌────────────────────┬───────────┬────────────────────────┬──────────────┬───────┬────────┬─────────┬─────────┬──────┬─────────────────────────────┐
+│ TIME              │ KEY       │ MODEL                  │ GROUP        │  COST │ TOKENS │ TIME(s) │ TTFT(s) │  TPS │ REQUEST                     │
+├┼──────────────────┼───────────┼────────────────────────┼──────────────┼───────┼────────┼─────────┼─────────┼──────┼─────────────────────────────┤
+│ 2026-11-13 08:36  │ demo-fixed │ deepseek-v4.1-flash-1017│ provider:demo │ $0.00 │ 275744 │    49.0 │    35.9 │ 47.6 │ 20261113133557142351560... │
+└──────────────────┴───────────┴────────────────────────┴──────────────┴───────┴────────┴─────────┴─────────┴──────┴─────────────────────────────┘
+```
+
+`--sort tps` orders by that figure and `--sort ttft` by the time to first
+token.
+
+```bash
+subrouterctl usage logs --sort tps --order desc
+subrouterctl usage logs --sort ttft --order asc
+```
+
+One log in full, including every field the platform returned and the whole
+performance payload it sends in the `other` field:
+
+```bash
+$ subrouterctl usage log 20261113133557142351560demo000
+Log 20261113133557142351560demo000
+────────────────────────────────────────────────────────────
+Id                   1042
+Created              2026-11-13 08:36:46
+Key                  demo-fixed
+Model                deepseek-v4.1-flash-1017
+Group                provider:demo
+IP                   203.0.113.7
+Prompt tokens        273410
+Completion tokens    2334
+Duration             49.0s
+Time to first token  35.9s
+Throughput           47.6 t/s
+Streaming            yes
+Cost                 $0.00
+Upstream request id  00000000-0000-4000-8000-000000000000
+
+  performance payload
+┌─────────────────────────┬─────────────────────────┐
+│ FIELD                   │ VALUE                   │
+├┼─────────────────────────┼─────────────────────────┤
+│ frt                     │ 35949                   │
+│ cache_tokens            │ 266368                  │
+│ provider_slug           │ demo                     │
+│ site_input_price        │ 0.016911764705882355    │
+└─────────────────────────┴─────────────────────────┘
+```
+
+The JSON and YAML output carries every field the API returned, so nothing is
+lost between the platform and a script.
+
 ### Single listings
 
 Every directory entry can be opened on its own. A model is addressed by its
@@ -221,7 +281,7 @@ subrouterctl
 ├── account         info · update · groups · models · subrouter-models
 │                   topup-info · topups · redeem · balance
 │                   notifications · aff · status
-├── usage           logs · stats · data · export
+├── usage           logs · log · stats · data · export
 ├── token           list · show · create · update · delete · delete-batch · types
 ├── model           list · show · routing · pricing · options
 ├── provider        list · show · models · subs · subscribe · unsubscribe
@@ -256,6 +316,7 @@ has a command.
 | `GET /api/user/topup/info`                              | `account topup-info`                 |
 | `GET /api/user/topup/self`                              | `account topups`                     |
 | `GET /api/log/self`                                     | `usage logs`                         |
+| `GET /api/log/self` (by request id)                    | `usage log <request-id>`             |
 | `GET /api/log/self/stat`                                | `usage stats`                        |
 | `GET /api/data/self`                                    | `usage data`                         |
 | `GET /api/subscription/plans`                           | `subscription plans`                 |
@@ -381,7 +442,7 @@ The smoke test creates and removes a few throwaway API keys, so it needs a
 real system access token. It restores the account to its original state.
 
 ```
-passed 58, failed 0
+passed 63, failed 0
 ```
 
 ---

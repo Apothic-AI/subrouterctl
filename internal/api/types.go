@@ -378,26 +378,152 @@ type Group struct {
 // GroupMap is the response of GET /api/user/self/groups.
 type GroupMap map[string]Group
 
-// LogEntry is one usage log row.
+// LogEntry is one usage log row. Every field the platform returns is kept so
+// that no detail is lost between the API and the terminal.
 type LogEntry struct {
-	ID                int     `json:"id"`
-	CreatedAt         int64   `json:"created_at"`
-	Type              int     `json:"type"`
-	Content           string  `json:"content"`
-	Username          string  `json:"username"`
-	TokenName         string  `json:"token_name"`
-	ModelName         string  `json:"model_name"`
-	ChannelName       string  `json:"channel_name"`
-	Group             string  `json:"group"`
-	Quota             float64 `json:"quota"`
-	PromptTokens      int     `json:"prompt_tokens"`
-	CompletionTokens  int     `json:"completion_tokens"`
-	UseTime           float64 `json:"use_time"`
-	IsStream          bool    `json:"is_stream"`
-	RequestID         string  `json:"request_id"`
-	UpstreamRequestID string  `json:"upstream_request_id"`
-	Other             any     `json:"other"`
+	ID                int      `json:"id"`
+	UserID            int      `json:"user_id"`
+	CreatedAt         int64    `json:"created_at"`
+	Type              int      `json:"type"`
+	Content           string   `json:"content"`
+	Username          string   `json:"username"`
+	TokenName         string   `json:"token_name"`
+	ModelName         string   `json:"model_name"`
+	Quota             float64  `json:"quota"`
+	PromptTokens      int      `json:"prompt_tokens"`
+	CompletionTokens  int      `json:"completion_tokens"`
+	UseTime           float64  `json:"use_time"`
+	IsStream          bool     `json:"is_stream"`
+	Channel           int      `json:"channel"`
+	ChannelName       string   `json:"channel_name"`
+	TokenID           int      `json:"token_id"`
+	Group             string   `json:"group"`
+	IP                string   `json:"ip"`
+	RequestID         string   `json:"request_id"`
+	UpstreamRequestID string   `json:"upstream_request_id"`
+	DistributorID     int      `json:"distributor_id"`
+	NodeName          string   `json:"node_name"`
+	UseGroup          string   `json:"use_group"`
+	Other             LogOther `json:"other"`
 }
+
+// LogOther is the performance payload attached to a usage log entry. The
+// platform sends it as a JSON string and keeps adding fields to it, so it is
+// held as a map: nothing the API returns is ever dropped.
+type LogOther map[string]any
+
+// UnmarshalJSON accepts the string encoded and the plain object form.
+func (o *LogOther) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		*o = LogOther{}
+		return nil
+	}
+	if s[0] == '"' {
+		var inner string
+		if err := json.Unmarshal(b, &inner); err != nil {
+			return nil
+		}
+		inner = strings.TrimSpace(inner)
+		if inner == "" || inner == "null" {
+			*o = LogOther{}
+			return nil
+		}
+		b = []byte(inner)
+	}
+	m := map[string]any{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil
+	}
+	*o = m
+	return nil
+}
+
+// Int returns an integer field of the payload.
+func (o LogOther) Int(key string) int64 {
+	switch v := o[key].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	}
+	return 0
+}
+
+// Float returns a floating point field of the payload.
+func (o LogOther) Float(key string) float64 {
+	switch v := o[key].(type) {
+	case float64:
+		return v
+	case int64:
+		return float64(v)
+	case int:
+		return float64(v)
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	}
+	return 0
+}
+
+// String returns a string field of the payload.
+func (o LogOther) String(key string) string {
+	if v, ok := o[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// FRT returns the time to first token in milliseconds.
+func (o LogOther) FRT() int64 { return o.Int("frt") }
+
+// CacheTokens returns the number of prompt tokens served from the cache.
+func (o LogOther) CacheTokens() int64 { return o.Int("cache_tokens") }
+
+// ProviderSlug returns the slug of the provider that served the call.
+func (o LogOther) ProviderSlug() string { return o.String("provider_slug") }
+
+// ProviderName returns the name of the provider that served the call.
+func (o LogOther) ProviderName() string { return o.String("provider_name") }
+
+// IsConsumption reports whether the entry is a model call rather than a
+// top-up or a system event.
+func (e LogEntry) IsConsumption() bool { return e.Type == LogTypeConsume }
+
+// FirstResponseTimeMs returns the time to first token in milliseconds.
+func (e LogEntry) FirstResponseTimeMs() int64 { return e.Other.FRT() }
+
+// OutputTPS returns the generation throughput in output tokens per second.
+//
+// The SubRouter console computes it exactly this way: the completion tokens
+// divided by the total request duration. A non streaming response has no
+// meaningful throughput, so the console does not show one.
+func (e LogEntry) OutputTPS() float64 {
+	if e.UseTime <= 0 || e.CompletionTokens <= 0 {
+		return 0
+	}
+	return float64(e.CompletionTokens) / e.UseTime
+}
+
+// ShowsTPS reports whether the console would show a throughput figure.
+func (e LogEntry) ShowsTPS() bool { return e.IsStream && e.OutputTPS() > 0 }
+
+// Log types reported by the platform.
+const (
+	// LogTypeAll matches every log entry.
+	LogTypeAll = 0
+	// LogTypeTopup is a wallet top-up.
+	LogTypeTopup = 1
+	// LogTypeConsume is a model call.
+	LogTypeConsume = 2
+	// LogTypeError is a failed request.
+	LogTypeError = 5
+)
 
 // LogStat is the aggregate usage summary.
 type LogStat struct {

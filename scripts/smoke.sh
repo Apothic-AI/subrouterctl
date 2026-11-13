@@ -78,7 +78,19 @@ check "usage data" "$BIN" usage data --from 7d --to now
 check "usage logs" "$BIN" usage logs --limit 5
 check "usage logs by model" "$BIN" usage logs --model deepseek --limit 5
 check "usage logs sorted by cost" "$BIN" usage logs --sort cost --order desc --limit 5
+check "usage logs sorted by tps" "$BIN" usage logs --sort tps --order desc --limit 5
+check "usage logs sorted by ttft" "$BIN" usage logs --sort ttft --order asc --limit 5
 check "usage export url" "$BIN" usage export --from 1d --to now
+
+request_id=$("$BIN" -o json usage logs --limit 1 2>/dev/null | grep -oE '"request_id": *"[^"]+"' | head -1 | grep -oE '"[^"]+"$' | tr -d '"')
+if [[ -n "$request_id" ]]; then
+  check "usage logs by request id" "$BIN" usage logs --request "$request_id" --limit 1
+  check "usage log detail" "$BIN" usage log "$request_id"
+  check "usage log detail json" "$BIN" -o json usage log "$request_id"
+else
+  FAIL=$((FAIL + 1))
+  printf '  \033[31m\u2717\033[0m could not resolve a request id\n'
+fi
 
 echo
 echo "token lifecycle"

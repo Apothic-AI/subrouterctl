@@ -48,6 +48,12 @@ func SortLogs(logs []LogEntry, field string, desc bool) {
 		less = func(i, j int) bool { return logs[i].Group < logs[j].Group }
 	case "duration", "use_time":
 		less = func(i, j int) bool { return logs[i].UseTime < logs[j].UseTime }
+	case "tps":
+		less = func(i, j int) bool { return logs[i].OutputTPS() < logs[j].OutputTPS() }
+	case "ttft":
+		less = func(i, j int) bool {
+			return logs[i].FirstResponseTimeMs() < logs[j].FirstResponseTimeMs()
+		}
 	default:
 		return
 	}

@@ -176,6 +176,11 @@ check "task list" "$BIN" task list
 check "task list filtered" "$BIN" task list --search x --limit 5
 
 echo
+echo "cache"
+check "cache round trip" "$BIN" --cache-ttl 1m model list --limit 3
+check "cache clear" "$BIN" --cache-clear
+
+echo
 echo "output formats"
 check "json output" "$BIN" -o json account info
 check "yaml output" "$BIN" -o yaml token list --limit 3

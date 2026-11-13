@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Apothic-AI/subrouterctl/internal/cache"
 )
 
 // Client talks to a SubRouter site.
@@ -30,6 +32,8 @@ type Client struct {
 	UserID      int
 	APIKey      string
 	HTTP        *http.Client
+	// Cache holds public directory responses when the caller opts in.
+	Cache *cache.Store
 }
 
 // New builds a client from resolved configuration.
@@ -172,8 +176,19 @@ func (c *Client) DoRaw(ctx context.Context, method, path string, params Params, 
 	}
 
 	target := c.BaseURL + path
-	if q := params.Encode(); q != "" {
-		target += q
+	query := params.Encode()
+	if query != "" {
+		target += query
+	}
+
+	// Public directory responses can be served from disk when the caller
+	// opts in. Account state is never cached.
+	cacheable := method == http.MethodGet && c.Cache.Enabled() && isCacheable(path)
+	key := cache.Key(method, path, query)
+	if cacheable {
+		if body, ok := c.Cache.Get(key); ok {
+			return body, nil
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, target, rdr)
@@ -223,7 +238,33 @@ func (c *Client) DoRaw(ctx context.Context, method, path string, params Params, 
 			return nil, &APIError{Status: resp.StatusCode, Path: path, Message: extractMessage(raw), Body: string(raw)}
 		}
 	}
+	if cacheable {
+		// A cache write failure must never break the command.
+		_ = c.Cache.Put(key, raw)
+	}
 	return raw, nil
+}
+
+// cacheablePaths are the public, slow to fetch directory endpoints that may
+// be served from the on-disk cache. Everything else is always live.
+var cacheablePaths = []string{
+	"/api/marketplace/models",
+	"/api/marketplace/providers",
+	"/api/marketplace/model-options",
+	"/api/marketplace/shared-models",
+	"/api/marketplace/shared-providers",
+	"/api/pricing",
+	"/api/status",
+}
+
+// isCacheable reports whether a path may be served from the cache.
+func isCacheable(path string) bool {
+	for _, p := range cacheablePaths {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // extractMessage pulls a human readable reason out of an error body.

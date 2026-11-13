@@ -367,6 +367,33 @@ same field names as the platform's own API.
 
 ---
 
+## Caching
+
+By default nothing is cached. Every command reads live data, so a balance is
+never stale and a key list never lies about a key.
+
+The public directories are slow to fetch. The model directory holds around
+2100 models spread over 43 pages, and a sorted listing needs all of them. When
+you would rather have speed than freshness, opt in:
+
+```bash
+subrouterctl --cache-ttl 5m model list --sort price --order desc
+```
+
+| Flag            | Meaning                                                                  |
+| --------------- | ------------------------------------------------------------------------ |
+| `--cache-ttl`   | Serve public directory responses from disk for this long. `0` disables it. |
+| `--cache-dir`   | Where the cache lives. Default `~/.cache/subrouterctl`.                   |
+| `--cache-clear` | Remove every cached entry and exit.                                      |
+
+Only the public marketplace responses are ever cached: the model directory, the
+provider directory, the price sheet and the site configuration. Your account,
+your keys, your balances, your logs and your tasks are always fetched live.
+
+A sorted listing needs every page, so those pages are now requested in
+parallel. The full 2100 model sort went from about 50 seconds to under 10,
+and a warm cache brings it down to a second.
+
 ## Credentials
 
 `subrouterctl auth login` runs the device authorization flow and writes
@@ -398,6 +425,8 @@ export SUBROUTER_BASE_URL=https://subrouter.ai
 | `--api-key`        | `SUBROUTER_API_KEY`     | `sk-` relay key                    |
 | `--quota-per-unit` | `SUBROUTER_QUOTA_PER_UNIT` | Quota units per 1 USD (500000)  |
 | `--show-secrets`   | –                       | Print secrets in full              |
+| `--cache-ttl`      | –                       | Cache public directory responses   |
+| `--cache-dir`      | `SUBROUTER_CACHE_DIR`   | Where the cache lives               |
 | `--no-color`       | –                       | Plain output                       |
 | `--timeout`        | –                       | Request timeout in seconds         |
 | `-y, --yes`        | –                       | Skip confirmation prompts          |
@@ -442,7 +471,7 @@ The smoke test creates and removes a few throwaway API keys, so it needs a
 real system access token. It restores the account to its original state.
 
 ```
-passed 63, failed 0
+passed 65, failed 0
 ```
 
 ---

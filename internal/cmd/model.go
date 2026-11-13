@@ -84,17 +84,31 @@ func fetchModels(ctx context.Context, cl *api.Client, lf listFlags, category str
 		}
 		return page.Items, nil
 	}
-	var all []api.MarketplaceModel
-	for page := 1; page <= 100; page++ {
-		q.Page = page
-		res, err := cl.ListMarketplaceModels(ctx, q)
+	// A local sort needs every page, so fetch them in parallel.
+	q.Page = 1
+	first, err := cl.ListMarketplaceModels(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	all := first.Items
+	pages := 1
+	if first.Total > size {
+		pages = (first.Total + size - 1) / size
+	}
+	if pages > 1 {
+		rest, err := concurrentPages(ctx, pages-1, 8, func(ctx context.Context, page int) ([]api.MarketplaceModel, int, error) {
+			p := q
+			p.Page = page + 1
+			res, err := cl.ListMarketplaceModels(ctx, p)
+			if err != nil {
+				return nil, 0, err
+			}
+			return res.Items, res.Total, nil
+		})
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, res.Items...)
-		if len(res.Items) < size || len(all) >= res.Total {
-			break
-		}
+		all = append(all, rest...)
 	}
 	return all, nil
 }

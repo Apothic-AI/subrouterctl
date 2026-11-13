@@ -6,13 +6,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Apothic-AI/subrouterctl/internal/api"
+	"github.com/Apothic-AI/subrouterctl/internal/cache"
 	"github.com/Apothic-AI/subrouterctl/internal/config"
 	"github.com/Apothic-AI/subrouterctl/internal/render"
 )
@@ -28,6 +31,9 @@ var (
 	flagQuotaPerUnit float64
 	flagShowSecrets  bool
 	flagYes          bool
+	flagCacheTTL     time.Duration
+	flagCacheDir     string
+	flagCacheClear   bool
 )
 
 // Version is stamped at build time.
@@ -53,6 +59,17 @@ token. No browser is needed after the one time device authorization.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// --cache-clear is a standalone action.
+			if flagCacheClear {
+				if err := newCacheStore().Clear(); err != nil {
+					return err
+				}
+				fmt.Println("cache cleared")
+				return nil
+			}
+			return cmd.Help()
+		},
 	}
 
 	pf := root.PersistentFlags()
@@ -66,6 +83,9 @@ token. No browser is needed after the one time device authorization.`,
 	pf.Float64Var(&flagQuotaPerUnit, "quota-per-unit", 0, "quota units per 1 USD (default 500000)")
 	pf.BoolVar(&flagShowSecrets, "show-secrets", false, "print secret values in full instead of masking them")
 	pf.BoolVarP(&flagYes, "yes", "y", false, "assume yes for confirmation prompts")
+	pf.DurationVar(&flagCacheTTL, "cache-ttl", 0, "serve public directory responses from the on-disk cache for this long (0 disables the cache)")
+	pf.StringVar(&flagCacheDir, "cache-dir", defaultCacheDir(), "directory for the on-disk cache")
+	pf.BoolVar(&flagCacheClear, "cache-clear", false, "remove every cached entry and exit")
 
 	root.AddCommand(
 		newAuthCommand(),
@@ -92,6 +112,23 @@ func cfg() (*config.Config, error) {
 	return config.Resolve(flagBaseURL, flagToken, flagAPIKey, flagUserID, flagQuotaPerUnit, flagTimeout, flagShowSecrets)
 }
 
+// defaultCacheDir is where the on-disk cache lives.
+func defaultCacheDir() string {
+	if p := os.Getenv("SUBROUTER_CACHE_DIR"); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".cache/subrouterctl"
+	}
+	return filepath.Join(home, ".cache", "subrouterctl")
+}
+
+// newCacheStore builds the on-disk cache store for this invocation.
+func newCacheStore() *cache.Store {
+	return cache.New(flagCacheDir, flagCacheTTL)
+}
+
 // client builds an API client and verifies the management credential pair.
 func client() (*api.Client, *config.Config, error) {
 	c, err := cfg()
@@ -101,7 +138,9 @@ func client() (*api.Client, *config.Config, error) {
 	if err := c.RequireManagementAuth(); err != nil {
 		return nil, nil, err
 	}
-	return api.New(c.BaseURL, c.AccessToken, c.UserID, c.APIKey, time.Duration(c.Timeout)*time.Second), c, nil
+	cl := api.New(c.BaseURL, c.AccessToken, c.UserID, c.APIKey, time.Duration(c.Timeout)*time.Second)
+	cl.Cache = newCacheStore()
+	return cl, c, nil
 }
 
 // relayClient builds an API client for the sk- relay surface.
@@ -270,6 +309,47 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// concurrentPages fetches pages in parallel with a bounded worker pool.
+// fetch returns the rows of one page and the total row count.
+func concurrentPages[T any](ctx context.Context, pages, workers int, fetch func(context.Context, int) ([]T, int, error)) ([]T, error) {
+	if pages <= 0 {
+		return nil, nil
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	rows := make([][]T, pages)
+	errs := make(chan error, pages)
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for p := 1; p <= pages; p++ {
+		wg.Add(1)
+		go func(page int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			got, _, err := fetch(ctx, page)
+			if err != nil {
+				errs <- err
+				return
+			}
+			rows[page-1] = got
+		}(p)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+	var all []T
+	for _, r := range rows {
+		all = append(all, r...)
+	}
+	return all, nil
 }
 
 // apiLogQuery builds a log query from the shared date and list flags.

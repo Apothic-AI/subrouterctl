@@ -1,0 +1,347 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+)
+
+// ---------------------------------------------------------------------------
+// Site
+// ---------------------------------------------------------------------------
+
+// GetStatus returns the public site configuration (GET /api/status).
+func (c *Client) GetStatus(ctx context.Context) (*SiteStatus, error) {
+	var s SiteStatus
+	if err := c.GetPublic(ctx, "/api/status", nil, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// GetNodeStatus returns the health of the platform nodes (GET /api/node-status).
+func (c *Client) GetNodeStatus(ctx context.Context) (any, error) {
+	var v any
+	if err := c.GetPublic(ctx, "/api/node-status", nil, &v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// ---------------------------------------------------------------------------
+// Account
+// ---------------------------------------------------------------------------
+
+// GetUser returns the current account (GET /api/user/self).
+func (c *Client) GetUser(ctx context.Context) (*User, error) {
+	var u User
+	if err := c.Get(ctx, "/api/user/self", nil, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// UpdateUser changes the account profile (PUT /api/user/self).
+func (c *Client) UpdateUser(ctx context.Context, body map[string]any) (*User, error) {
+	var u User
+	if err := c.Put(ctx, "/api/user/self", body, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// GetTopupInfo returns the available top-up methods (GET /api/user/topup/info).
+func (c *Client) GetTopupInfo(ctx context.Context) (*TopupInfo, error) {
+	var t TopupInfo
+	if err := c.Get(ctx, "/api/user/topup/info", nil, &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// GetTopups returns the top-up history (GET /api/user/topup/self).
+func (c *Client) GetTopups(ctx context.Context, page, pageSize int) ([]TopupRecord, error) {
+	var raw json.RawMessage
+	err := c.Get(ctx, "/api/user/topup/self", Params{"p": page, "page_size": pageSize}, &raw)
+	if err != nil {
+		return nil, err
+	}
+	var out []TopupRecord
+	if err := DecodeList(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RedeemVoucher redeems a voucher code the account already owns.
+// It tries the current route first and falls back to the legacy route.
+func (c *Client) RedeemVoucher(ctx context.Context, code string) (string, error) {
+	body := map[string]any{"key": code}
+	var lastErr error
+	for _, path := range []string{"/api/user/self/topup", "/api/user/topup"} {
+		var out any
+		err := c.Post(ctx, path, body, &out)
+		if err == nil {
+			return fmt.Sprintf("voucher %s redeemed", code), nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+// GetNotifications returns the account notification feed.
+func (c *Client) GetNotifications(ctx context.Context, page, pageSize int) (any, error) {
+	var out any
+	err := c.Get(ctx, "/api/user/self/notifications", Params{"p": page, "page_size": pageSize}, &out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Affiliate / referral
+// ---------------------------------------------------------------------------
+
+// GetAffSummary returns the referral invite code (GET /api/user/aff). The
+// endpoint answers with the plain code string.
+func (c *Client) GetAffSummary(ctx context.Context) (*AffSummary, error) {
+	var code string
+	if err := c.Get(ctx, "/api/user/aff", nil, &code); err != nil {
+		return nil, err
+	}
+	return &AffSummary{AffCode: code}, nil
+}
+
+// GetAffEarningTotals folds the referral earnings rows into totals.
+func (c *Client) GetAffEarningTotals(ctx context.Context) (invites int, quota float64, commission float64, err error) {
+	var rows []struct {
+		Quota           float64 `json:"quota"`
+		CommissionQuota float64 `json:"commission_quota"`
+	}
+	if err := c.Get(ctx, "/api/user/aff_earnings", nil, &rows); err != nil {
+		return 0, 0, 0, err
+	}
+	for _, r := range rows {
+		quota += r.Quota
+		commission += r.CommissionQuota
+	}
+	return len(rows), quota, commission, nil
+}
+
+// GetAffEarnings returns detailed referral earnings (GET /api/user/aff_earnings).
+func (c *Client) GetAffEarnings(ctx context.Context) (any, error) {
+	var out any
+	if err := c.Get(ctx, "/api/user/aff_earnings", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetAffPayouts returns referral payout history (GET /api/user/aff_payouts).
+func (c *Client) GetAffPayouts(ctx context.Context) (any, error) {
+	var out any
+	if err := c.Get(ctx, "/api/user/aff_payouts", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// TransferAff moves referral earnings into the usable balance.
+// quota is in internal quota units, where 500000 equals 1 USD.
+func (c *Client) TransferAff(ctx context.Context, quota float64) (any, error) {
+	var out any
+	err := c.Post(ctx, "/api/user/aff_transfer", map[string]any{"quota": quota}, &out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Usage
+// ---------------------------------------------------------------------------
+
+// LogQuery holds the filters accepted by the usage log endpoints.
+type LogQuery struct {
+	Cursor            string
+	PageSize          int
+	Type              int
+	TokenName         string
+	ModelName         string
+	Username          string
+	Group             string
+	RequestID         string
+	UpstreamRequestID string
+	StartTimestamp    int64
+	EndTimestamp      int64
+}
+
+// Params renders the query as request parameters. A zero Type is omitted so
+// the server default applies.
+func (q LogQuery) Params() Params {
+	p := Params{}
+	if q.Cursor != "" {
+		p["cursor"] = q.Cursor
+	}
+	if q.PageSize > 0 {
+		p["page_size"] = q.PageSize
+	}
+	if q.Type > 0 {
+		p["type"] = q.Type
+	}
+	if q.TokenName != "" {
+		p["token_name"] = q.TokenName
+	}
+	if q.ModelName != "" {
+		p["model_name"] = q.ModelName
+	}
+	if q.Username != "" {
+		p["username"] = q.Username
+	}
+	if q.Group != "" {
+		p["group"] = q.Group
+	}
+	if q.RequestID != "" {
+		p["request_id"] = q.RequestID
+	}
+	if q.UpstreamRequestID != "" {
+		p["upstream_request_id"] = q.UpstreamRequestID
+	}
+	if q.StartTimestamp > 0 {
+		p["start_timestamp"] = q.StartTimestamp
+	}
+	if q.EndTimestamp > 0 {
+		p["end_timestamp"] = q.EndTimestamp
+	}
+	return p
+}
+
+// LogPage is one page of usage logs.
+type LogPage struct {
+	Items      []LogEntry `json:"items"`
+	HasMore    bool       `json:"has_more"`
+	NextCursor string     `json:"next_cursor"`
+	PageSize   int        `json:"page_size"`
+}
+
+// GetLogs returns a page of usage logs (GET /api/log/self).
+func (c *Client) GetLogs(ctx context.Context, q LogQuery) (*LogPage, error) {
+	var p LogPage
+	if err := c.Get(ctx, "/api/log/self/", q.Params(), &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// GetLogStat returns the usage summary (GET /api/log/self/stat).
+func (c *Client) GetLogStat(ctx context.Context, q LogQuery) (*LogStat, error) {
+	var s LogStat
+	if err := c.Get(ctx, "/api/log/self/stat", q.Params(), &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// GetData returns per-day quota usage (GET /api/data/self).
+func (c *Client) GetData(ctx context.Context, start, end int64) ([]DataPoint, error) {
+	var out []DataPoint
+	err := c.Get(ctx, "/api/data/self", Params{"start_timestamp": start, "end_timestamp": end}, &out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ExportLogsURL returns the CSV export URL for the given filters.
+func (c *Client) ExportLogsURL(q LogQuery) string {
+	return c.BaseURL + "/api/log/self/export" + q.Params().Encode()
+}
+
+// ---------------------------------------------------------------------------
+// Billing (relay key)
+// ---------------------------------------------------------------------------
+
+// GetBillingSubscription reads the wallet summary (GET /v1/dashboard/billing/subscription).
+func (c *Client) GetBillingSubscription(ctx context.Context) (any, error) {
+	var out any
+	if err := c.GetRelay(ctx, "/v1/dashboard/billing/subscription", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetBillingUsage reads the billing usage summary (GET /v1/dashboard/billing/usage).
+func (c *Client) GetBillingUsage(ctx context.Context) (any, error) {
+	var out any
+	if err := c.GetRelay(ctx, "/v1/dashboard/billing/usage", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetRelayModels lists the models reachable with the relay key (GET /v1/models).
+// The endpoint answers with a bare array on the OpenAI protocol surface.
+func (c *Client) GetRelayModels(ctx context.Context) ([]map[string]any, error) {
+	raw, err := c.DoRaw(ctx, "GET", "/v1/models", nil, nil, AuthRelay)
+	if err != nil {
+		return nil, err
+	}
+	var direct []map[string]any
+	if err := json.Unmarshal(raw, &direct); err == nil {
+		return direct, nil
+	}
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+// ---------------------------------------------------------------------------
+// Device authorization
+// ---------------------------------------------------------------------------
+
+// DeviceAuthRequest is the first leg of the device authorization flow.
+type DeviceAuthRequest struct {
+	UserCode        string `json:"user_code"`
+	DeviceCode      string `json:"device_code"`
+	VerificationURL string `json:"verification_url"`
+	ExpiresIn       int    `json:"expires_in"`
+	Interval        int    `json:"interval"`
+}
+
+// StartDeviceAuth begins the device authorization flow (POST /api/device_auth).
+func (c *Client) StartDeviceAuth(ctx context.Context, channel string) (*DeviceAuthRequest, error) {
+	var d DeviceAuthRequest
+	err := c.Do(ctx, "POST", "/api/device_auth", nil, map[string]any{"channel": channel}, AuthPublic, &d)
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// DeviceAuthPoll is the result of polling the device authorization flow.
+type DeviceAuthPoll struct {
+	Status      string `json:"status"`
+	Key         string `json:"key"`
+	AccessToken string `json:"access_token"`
+	UserID      int    `json:"user_id"`
+	BaseURL     string `json:"base_url"`
+	Message     string `json:"message"`
+}
+
+// PollDeviceAuth polls the device authorization flow (POST /api/device_auth/poll).
+func (c *Client) PollDeviceAuth(ctx context.Context, deviceCode string) (*DeviceAuthPoll, error) {
+	var p DeviceAuthPoll
+	err := c.Do(ctx, "POST", "/api/device_auth/poll", nil, map[string]any{"device_code": deviceCode}, AuthPublic, &p)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// RawJSON is a helper for commands that print an arbitrary payload.
+type RawJSON = json.RawMessage

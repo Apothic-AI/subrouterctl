@@ -134,6 +134,28 @@ func TestGetLogRangeKeepsTheRowsOfAFailedFetch(t *testing.T) {
 	}
 }
 
+func TestGetLogRangeLeavesThePresentOpen(t *testing.T) {
+	hits := 0
+	srv := logServer(t, &hits)
+	cl := rangeClient(t, srv)
+	now := time.Now().Unix()
+	q := LogQuery{StartTimestamp: now - 3600, EndTimestamp: now}
+
+	if _, err := cl.GetLogRange(context.Background(), q); err != nil {
+		t.Fatalf("GetLogRange: %v", err)
+	}
+	before := hits
+	// The same range is fetched again. The part that reaches into the
+	// present is never filed as covered, because a request that was still
+	// running has no log row yet.
+	if _, err := cl.GetLogRange(context.Background(), q); err != nil {
+		t.Fatalf("GetLogRange: %v", err)
+	}
+	if hits == before {
+		t.Error("the open end of the range must be fetched again")
+	}
+}
+
 func TestGetLogRangeKeepsAccountsApart(t *testing.T) {
 	hits := 0
 	srv := logServer(t, &hits)

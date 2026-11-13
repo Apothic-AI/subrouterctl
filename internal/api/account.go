@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Apothic-AI/subrouterctl/internal/cache"
 )
@@ -331,7 +332,7 @@ func (c *Client) GetLogRange(ctx context.Context, q LogQuery) ([]LogEntry, error
 			}
 			continue
 		}
-		if err := c.LogRanges.Put(sig, cache.Window{Span: chunk, Rows: rows[i]}); err != nil && fetchErr == nil {
+		if err := c.LogRanges.Put(sig, cache.Window{Span: settled(chunk), Rows: rows[i]}); err != nil && fetchErr == nil {
 			// The rows were fetched, so they are shown even when they
 			// could not be written to the cache.
 			fetchErr = fmt.Errorf("cache the log range: %w", err)
@@ -368,6 +369,19 @@ func (c *Client) GetLogRange(ctx context.Context, q LogQuery) ([]LogEntry, error
 	return out, fetchErr
 }
 
+// settled returns the span that a fetched chunk may be filed as covered.
+//
+// A chunk that reaches into the present is left open for a while: the rows
+// of the requests that were still running when it was fetched are written
+// later, and the next run has to fetch them again.
+func settled(chunk cache.Span) cache.Span {
+	limit := time.Now().Unix() - logSettleSeconds
+	if chunk.To > limit {
+		return cache.Span{From: chunk.From, To: limit}
+	}
+	return chunk
+}
+
 // logRowKey identifies a log row, so that the same row is not shown twice.
 func logRowKey(e LogEntry, raw []byte) string {
 	if e.RequestID == "" {
@@ -382,6 +396,15 @@ const logChunkSeconds = 24 * 60 * 60
 
 // logWorkers is how many log chunks are fetched at the same time.
 const logWorkers = 6
+
+// logSettleSeconds is how long a fetched range is left open.
+//
+// A usage log row is written when the request that it describes is over, so
+// a request that is still running has no row yet. A range that ends at the
+// present is therefore only filed as covered up to this many seconds in the
+// past, which keeps the rows of the requests that were in flight at that
+// moment from falling into a hole.
+const logSettleSeconds = 600
 
 // fetchLogChunks fetches the chunks of a log range side by side with a
 // bounded worker pool. Every chunk keeps its own result and error, so one

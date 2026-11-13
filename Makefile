@@ -1,8 +1,12 @@
 BINARY  := subrouterctl
+LIBDIR  := build
+LIB     := $(LIBDIR)/libsubrouter.so
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X github.com/Apothic-AI/subrouterctl/internal/cmd.Version=$(VERSION)
+LDFLAGS := -s -w \
+	-X github.com/Apothic-AI/subrouterctl/internal/cmd.Version=$(VERSION) \
+	-X github.com/Apothic-AI/subrouterctl/pkg/service.Version=$(VERSION)
 
-.PHONY: all build install test smoke fmt vet lint clean help
+.PHONY: all build install test smoke bindings bindings-python test-bindings fmt vet lint clean help
 
 all: build ## Build the binary
 
@@ -18,6 +22,18 @@ test: ## Run the unit tests
 smoke: build ## Run the live smoke test against the configured account
 	./scripts/smoke.sh ./$(BINARY)
 
+bindings: ## Build the shared library that the Python binding loads
+	@mkdir -p $(LIBDIR)
+	CGO_ENABLED=1 go build -buildmode=c-shared -ldflags '$(LDFLAGS)' -o $(LIB) ./bridge/cgo
+
+bindings-python: bindings ## Put the shared library inside the Python package
+	@mkdir -p packages/python/src/subrouterctl/_lib
+	cp $(LIB) packages/python/src/subrouterctl/_lib/
+
+test-bindings: build bindings ## Run the Python and TypeScript binding tests
+	cd packages/python && PYTHONPATH=src python3 -m pytest tests -q
+	cd packages/typescript && npm test
+
 fmt: ## Format the source
 	gofmt -w .
 
@@ -28,6 +44,7 @@ lint: fmt vet ## Format and vet
 
 clean: ## Remove build artefacts
 	rm -f $(BINARY)
+	rm -rf $(LIBDIR)
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \

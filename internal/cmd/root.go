@@ -115,6 +115,7 @@ token. No browser is needed after the one time device authorization.`,
 		newTaskCommand(),
 		newMerchantCommand(),
 		newStationCommand(),
+		newBridgeCommand(),
 	)
 	return root
 }

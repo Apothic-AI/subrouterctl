@@ -127,20 +127,8 @@ func (s *RangeStore) Put(signature string, w Window) error {
 	return tx.Commit()
 }
 
-// Clear removes every cached row and window.
-func (s *RangeStore) Clear() error {
-	if !s.Enabled() {
-		return nil
-	}
-	for _, table := range []string{"log_rows", "log_windows"} {
-		if _, err := s.DB.db.Exec("DELETE FROM " + table); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// mergeSpans merges overlapping or touching spans.
+// mergeSpans merges overlapping or touching spans. Both ends of a span are
+// included, so two spans that share a second are one span.
 func mergeSpans(spans []Span) []Span {
 	if len(spans) == 0 {
 		return nil
@@ -153,7 +141,7 @@ func mergeSpans(spans []Span) []Span {
 	})
 	var out []Span
 	for _, s := range spans {
-		if len(out) == 0 || s.From > out[len(out)-1].To {
+		if len(out) == 0 || s.From > out[len(out)-1].To+1 {
 			out = append(out, s)
 			continue
 		}
@@ -164,32 +152,33 @@ func mergeSpans(spans []Span) []Span {
 	return out
 }
 
-// missingSpans subtracts the covered spans from [from,to].
+// missingSpans subtracts the covered spans from [from,to]. Both ends of a
+// span are included, so a covered second is never fetched twice.
 func missingSpans(covered []Span, from, to int64) []Span {
 	var out []Span
 	cursor := from
 	for _, c := range covered {
-		if c.To <= cursor {
+		if c.To < cursor {
 			continue
 		}
-		if c.From >= to {
+		if c.From > to {
 			break
 		}
 		if c.From > cursor {
-			end := c.From
+			end := c.From - 1
 			if end > to {
 				end = to
 			}
 			out = append(out, Span{From: cursor, To: end})
 		}
-		if c.To > cursor {
-			cursor = c.To
+		if c.To >= cursor {
+			cursor = c.To + 1
 		}
-		if cursor >= to {
+		if cursor > to {
 			return out
 		}
 	}
-	if cursor < to {
+	if cursor <= to {
 		out = append(out, Span{From: cursor, To: to})
 	}
 	return out

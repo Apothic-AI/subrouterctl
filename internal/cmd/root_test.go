@@ -16,7 +16,7 @@ func TestParseTimeFlag(t *testing.T) {
 		{in: "1738281600", check: func(v int64) bool { return v == 1738281600 }},
 		{in: "24h", check: func(v int64) bool { return v > 0 && time.Since(time.Unix(v, 0)) < 25*time.Hour }},
 		{in: "7d", check: func(v int64) bool { return v > 0 && time.Since(time.Unix(v, 0)) < 8*24*time.Hour }},
-		{in: "2026-01-31", check: func(v int64) bool { return time.Unix(v, 0).UTC().Format("2006-01-02") == "2026-01-31" }},
+		{in: "2026-01-31", check: func(v int64) bool { return time.Unix(v, 0).Format("2006-01-02") == "2026-01-31" }},
 		{in: "not-a-time", wantErr: true},
 	}
 	for _, c := range cases {

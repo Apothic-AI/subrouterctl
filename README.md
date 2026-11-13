@@ -369,6 +369,10 @@ subrouterctl -o yaml token list --limit 3        # machine readable
 Every list command honours `--output`, and the JSON and YAML payloads use the
 same field names as the platform's own API.
 
+The payload goes to the standard output and everything else, the warnings and
+the errors, goes to the error stream. A JSON payload therefore stays
+machine readable even when the command had something to say.
+
 ---
 
 ## Caching

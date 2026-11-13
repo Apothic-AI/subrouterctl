@@ -103,18 +103,10 @@ func Resolve(flagBase, flagToken, flagAPIKey string, flagUserID int, flagQuotaPe
 		BaseURL:        strings.TrimRight(firstNonEmpty(flagBase, os.Getenv("SUBROUTER_BASE_URL"), creds.BaseURL, DefaultBaseURL), "/"),
 		AccessToken:    firstNonEmpty(flagToken, os.Getenv("SUBROUTER_ACCESS_TOKEN"), creds.AccessToken),
 		APIKey:         firstNonEmpty(flagAPIKey, os.Getenv("SUBROUTER_API_KEY"), creds.Key),
-		QuotaPerUnit:   DefaultQuotaPerUnit,
+		QuotaPerUnit:   ResolveQuotaPerUnit(flagQuotaPerUnit),
 		Timeout:        timeout,
 		ShowSecrets:    showSecrets,
 		CredentialPath: credPath,
-	}
-
-	if flagQuotaPerUnit > 0 {
-		cfg.QuotaPerUnit = flagQuotaPerUnit
-	} else if s := os.Getenv("SUBROUTER_QUOTA_PER_UNIT"); s != "" {
-		if v, err := strconv.ParseFloat(s, 64); err == nil && v > 0 {
-			cfg.QuotaPerUnit = v
-		}
 	}
 
 	uid := flagUserID
@@ -131,6 +123,20 @@ func Resolve(flagBase, flagToken, flagAPIKey string, flagUserID int, flagQuotaPe
 	cfg.UserID = uid
 
 	return cfg, nil
+}
+
+// ResolveQuotaPerUnit resolves the quota to dollar ratio. The flag wins over
+// the environment variable, which wins over the platform default.
+func ResolveQuotaPerUnit(flagValue float64) float64 {
+	if flagValue > 0 {
+		return flagValue
+	}
+	if s := os.Getenv("SUBROUTER_QUOTA_PER_UNIT"); s != "" {
+		if v, err := strconv.ParseFloat(s, 64); err == nil && v > 0 {
+			return v
+		}
+	}
+	return DefaultQuotaPerUnit
 }
 
 // RequireManagementAuth verifies that the account management credential pair

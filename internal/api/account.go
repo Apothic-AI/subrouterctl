@@ -244,7 +244,7 @@ func (q LogQuery) Signature() string {
 // logSignature identifies a log query inside the cache. It adds the scope of
 // the account, so the logs of one account are never served to another.
 func (c *Client) logSignature(q LogQuery) string {
-	return c.Scope() + "|" + q.Signature()
+	return c.Scope(AuthManagement) + "|" + q.Signature()
 }
 
 // GetLogs returns a page of usage logs (GET /api/log/self).
@@ -262,6 +262,9 @@ type logPageRaw struct {
 	items      []json.RawMessage
 	hasMore    bool
 	nextCursor string
+	// total is the number of rows the platform counts for the range. It is
+	// used to tell a complete walk from a truncated one.
+	total int
 }
 
 // getLogPageRaw fetches one page of raw log items.
@@ -279,16 +282,14 @@ func (c *Client) getLogPageRaw(ctx context.Context, q LogQuery) (logPageRaw, err
 			Items      []json.RawMessage `json:"items"`
 			HasMore    bool              `json:"has_more"`
 			NextCursor string            `json:"next_cursor"`
+			Total      int               `json:"total"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return logPageRaw{}, err
 	}
-	return logPageRaw{env.Data.Items, env.Data.HasMore, env.Data.NextCursor}, nil
+	return logPageRaw{env.Data.Items, env.Data.HasMore, env.Data.NextCursor, env.Data.Total}, nil
 }
-
-// maxLogSpan is the longest window the platform accepts in one log request.
-const maxLogSpan = 30 * 24 * 60 * 60
 
 // maxLogPages is the page limit for one log range. It keeps a cursor that
 // never ends from looping forever.
@@ -395,26 +396,34 @@ func fetchLogChunks(ctx context.Context, chunks []cache.Span, fetch func(context
 	if workers > len(chunks) {
 		workers = len(chunks)
 	}
-	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
-	for i := range chunks {
+	queue := make(chan int)
+	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			rows[i], errs[i] = fetch(ctx, chunks[i])
-		}(i)
+			for i := range queue {
+				rows[i], errs[i] = fetch(ctx, chunks[i])
+			}
+		}()
 	}
+	for i := range chunks {
+		queue <- i
+	}
+	close(queue)
 	wg.Wait()
 	return rows, errs
 }
 
 // fetchLogSpan downloads every log row inside a time span.
+//
+// The rows that were read before a failure are returned as well, so a half
+// finished chunk still shows what it has.
 func (c *Client) fetchLogSpan(ctx context.Context, q LogQuery, from, to int64) ([]cache.Row, error) {
 	var rows []cache.Row
 	cursor := "first"
 	pages := 0
+	total := -1
 	for {
 		qq := q
 		qq.Cursor = cursor
@@ -422,7 +431,10 @@ func (c *Client) fetchLogSpan(ctx context.Context, q LogQuery, from, to int64) (
 		qq.EndTimestamp = to
 		page, err := c.getLogPageRaw(ctx, qq)
 		if err != nil {
-			return nil, err
+			return rows, err
+		}
+		if total < 0 {
+			total = page.total
 		}
 		for _, item := range page.items {
 			var probe struct {
@@ -445,6 +457,13 @@ func (c *Client) fetchLogSpan(ctx context.Context, q LogQuery, from, to int64) (
 			// A cursor that never ends would otherwise loop forever.
 			return rows, fmt.Errorf("stopped after %d pages of logs in the range %d to %d", maxLogPages, from, to)
 		}
+	}
+	if total >= 0 && len(rows) < total {
+		// The platform counts more rows than the walk produced, so the
+		// range is not complete. It is not filed as covered, so the next
+		// run fetches it again.
+		return rows, fmt.Errorf("the range %d to %d holds %d rows, but only %d could be read",
+			from, to, total, len(rows))
 	}
 	return rows, nil
 }

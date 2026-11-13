@@ -41,8 +41,8 @@ type DB struct {
 
 // Open opens or creates the cache database in dir.
 //
-// The database is opened lazily and its failures are not fatal: a cache that
-// cannot be opened simply does not cache anything.
+// A database that cannot be opened is not fatal for the caller: a command
+// that cannot open the cache simply runs without one.
 func Open(dir string) (*DB, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("cache: no directory")
@@ -99,16 +99,27 @@ CREATE TABLE IF NOT EXISTS log_windows (
 	}
 	d.db = db
 	// The cache can hold account data, so it stays readable by its owner
-	// only.
-	_ = os.Chmod(d.path, 0o600)
+	// only. The write ahead log and the shared memory file hold the same
+	// data as the database, so they are locked down as well.
+	d.lockDown()
 	d.removeLegacyFiles()
 	return nil
+}
+
+// lockDown restricts the database and its side files to their owner.
+func (d *DB) lockDown() {
+	for _, path := range []string{d.path, d.path + "-wal", d.path + "-shm", d.path + "-journal"} {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		_ = os.Chmod(path, 0o600)
+	}
 }
 
 // schemaVersion is the layout of the cache tables. A database that holds a
 // different version is rebuilt from scratch: the cache is a copy of data the
 // platform still serves, so throwing it away costs nothing but a fetch.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migrate brings the database up to the current schema.
 func (d *DB) migrate(db *sql.DB, schema string) error {
@@ -223,7 +234,7 @@ func (s *Store) Get(key string) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
-	if time.Since(time.Unix(storedAt, 0)) > s.TTL {
+	if time.Since(time.UnixMilli(storedAt)) > s.TTL {
 		return nil, false
 	}
 	out, err := decompress(body)
@@ -259,7 +270,7 @@ func (s *Store) Put(key string, body []byte) error {
 	_, err := s.DB.db.Exec(
 		`INSERT INTO entries (key, stored_at, body) VALUES (?, ?, ?)
 		 ON CONFLICT(key) DO UPDATE SET stored_at = excluded.stored_at, body = excluded.body`,
-		key, time.Now().Unix(), compress(body))
+		key, time.Now().UnixMilli(), compress(body))
 	return err
 }
 
@@ -278,18 +289,6 @@ func (s *Store) Clear() error {
 		return fmt.Errorf("cache: vacuum: %w", err)
 	}
 	return nil
-}
-
-// Size reports how many bytes the database file uses.
-func (s *Store) Size() int64 {
-	if !s.Enabled() {
-		return 0
-	}
-	info, err := os.Stat(s.DB.path)
-	if err != nil {
-		return 0
-	}
-	return info.Size()
 }
 
 // rowID extracts the request identifier of a cached row so that duplicates

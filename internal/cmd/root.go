@@ -69,13 +69,20 @@ token. No browser is needed after the one time device authorization.`,
 			if !flagCacheClear {
 				return
 			}
-			if err := newCacheStore().Clear(); err != nil {
+			dir := flagCacheDir
+			if dir == "" {
+				dir = defaultCacheDir()
+			}
+			db, err := cache.Open(dir)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "subrouterctl: the cache could not be opened:", err)
+				os.Exit(1)
+			}
+			if err := cache.New(db, 0).Clear(); err != nil {
 				fmt.Fprintln(os.Stderr, "subrouterctl:", err)
 				os.Exit(1)
 			}
-			if cacheDB != nil {
-				_ = cacheDB.Close()
-			}
+			_ = db.Close()
 			fmt.Println("cache cleared")
 			os.Exit(0)
 		},
@@ -139,8 +146,12 @@ func defaultCacheDir() string {
 // cacheDB is the SQLite cache database for this invocation.
 var cacheDB *cache.DB
 
+// cacheErr holds the reason the cache could not be opened.
+var cacheErr error
+
 // openCacheDB opens the cache database once per invocation. A database that
-// cannot be opened is not fatal: the command simply runs without a cache.
+// cannot be opened is not fatal: the command simply runs without a cache,
+// and the reason is reported.
 func openCacheDB() *cache.DB {
 	if cacheDB != nil {
 		return cacheDB
@@ -151,10 +162,20 @@ func openCacheDB() *cache.DB {
 	}
 	db, err := cache.Open(dir)
 	if err != nil {
+		cacheErr = err
 		return nil
 	}
 	cacheDB = db
 	return db
+}
+
+// warnAboutTheCache tells the user that the cache is not in use.
+func warnAboutTheCache() {
+	if cacheErr == nil {
+		return
+	}
+	writer().Warn("the cache is not in use: %v", cacheErr)
+	cacheErr = nil
 }
 
 // newCacheStore builds the on-disk cache store for this invocation.
@@ -174,9 +195,10 @@ func client() (*api.Client, *config.Config, error) {
 	cl := api.New(c.BaseURL, c.AccessToken, c.UserID, c.APIKey, time.Duration(c.Timeout)*time.Second)
 	cl.Cache = newCacheStore()
 	cl.LogRanges = cache.NewRangeStore(openCacheDB())
-	cl.CacheNotice = func(format string, a ...any) {
-		writer().Warn(format, a...)
+	cl.CacheNotice = func(msg string) {
+		writer().Warn("%s", msg)
 	}
+	warnAboutTheCache()
 	return cl, c, nil
 }
 
@@ -191,9 +213,10 @@ func relayClient() (*api.Client, *config.Config, error) {
 	}
 	cl := api.New(c.BaseURL, c.AccessToken, c.UserID, c.APIKey, time.Duration(c.Timeout)*time.Second)
 	cl.Cache = newCacheStore()
-	cl.CacheNotice = func(format string, a ...any) {
-		writer().Warn(format, a...)
+	cl.CacheNotice = func(msg string) {
+		writer().Warn("%s", msg)
 	}
+	warnAboutTheCache()
 	return cl, c, nil
 }
 
@@ -213,6 +236,8 @@ func writer() *render.Writer {
 	}
 	if flagQuotaPerUnit > 0 {
 		opts.QuotaPerUnit = flagQuotaPerUnit
+	} else {
+		opts.QuotaPerUnit = config.ResolveQuotaPerUnit(0)
 	}
 	return render.New(opts)
 }
@@ -226,14 +251,20 @@ func ctx() (context.Context, context.CancelFunc) {
 	return context.WithCancel(context.Background())
 }
 
+// stdin is the reader used by the confirmation prompts. It is kept so that
+// a second prompt does not lose the input the first one buffered.
+var stdin = bufio.NewReader(os.Stdin)
+
 // confirm asks the operator to approve a destructive action.
+//
+// The prompt goes to the error stream, so that it never lands inside a JSON
+// or YAML payload.
 func confirm(prompt string) bool {
 	if flagYes {
 		return true
 	}
-	fmt.Printf("%s [y/N]: ", prompt)
-	r := bufio.NewReader(os.Stdin)
-	line, err := r.ReadString('\n')
+	fmt.Fprintf(os.Stderr, "%s [y/N]: ", prompt)
+	line, err := stdin.ReadString('\n')
 	if err != nil {
 		return false
 	}
@@ -322,7 +353,7 @@ func parseTimeFlag(s string, endOfDay bool) (int64, error) {
 			return now.Add(-time.Duration(n) * time.Minute).Unix(), nil
 		}
 	}
-	if t, err := time.Parse("2006-01-02", s); err == nil {
+	if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
 		if endOfDay {
 			t = t.Add(24*time.Hour - time.Second)
 		}

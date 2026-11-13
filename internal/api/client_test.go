@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,7 +78,7 @@ func TestClientFallsBackToTheCacheWhenOffline(t *testing.T) {
 	// the caller must be told that it came from the cache.
 	srv.Close()
 	var notice string
-	cl.CacheNotice = func(format string, a ...any) { notice = format }
+	cl.CacheNotice = func(msg string) { notice = msg }
 	body, err = cl.DoRaw(context.Background(), "GET", "/api/thing", nil, nil, AuthManagement)
 	if err != nil {
 		t.Fatalf("DoRaw offline: %v", err)
@@ -146,6 +148,65 @@ func TestClientGivesUpAfterTooManyRetries(t *testing.T) {
 	}
 	if hits != 4 {
 		t.Errorf("the server was hit %d times, want 4: three retries and no more", hits)
+	}
+}
+
+func TestClientDecodesAPlainObject(t *testing.T) {
+	// The relay surface answers without an envelope.
+	cl, _ := testClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"billing_subscription","hard_limit_usd":12.5}`))
+	})
+	var out map[string]any
+	if err := cl.Do(context.Background(), "GET", "/v1/dashboard/billing/subscription", nil, nil, AuthRelay, &out); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if out["object"] != "billing_subscription" {
+		t.Errorf("out = %v, want the decoded object", out)
+	}
+}
+
+func TestClientDecodesAnEnvelope(t *testing.T) {
+	cl, _ := testClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"ok","data":{"n":7}}`))
+	})
+	var out struct {
+		N int `json:"n"`
+	}
+	if err := cl.Do(context.Background(), "GET", "/api/thing", nil, nil, AuthManagement, &out); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if out.N != 7 {
+		t.Errorf("out = %v, want n = 7", out)
+	}
+}
+
+func TestClientNamesTheReasonItFellBack(t *testing.T) {
+	var hang atomic.Bool
+	cl, _ := testClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
+		if hang.Load() {
+			time.Sleep(200 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{"n":1}}`))
+	})
+	if _, err := cl.DoRaw(context.Background(), "GET", "/api/thing", nil, nil, AuthManagement); err != nil {
+		t.Fatalf("DoRaw: %v", err)
+	}
+	var notice string
+	cl.CacheNotice = func(msg string) { notice = msg }
+
+	// The server stops answering, so the request runs out of time. The
+	// cached response is served, and the reason says so.
+	hang.Store(true)
+	cl.HTTP.Timeout = 50 * time.Millisecond
+	body, err := cl.DoRaw(context.Background(), "GET", "/api/thing", nil, nil, AuthManagement)
+	if err != nil {
+		t.Fatalf("DoRaw: %v", err)
+	}
+	if string(body) != `{"success":true,"data":{"n":1}}` {
+		t.Errorf("body = %s, want the cached response", body)
+	}
+	if !strings.Contains(notice, "time") {
+		t.Errorf("notice = %q, want it to name the timeout", notice)
 	}
 }
 

@@ -220,7 +220,7 @@ func TestStoreReadsUncompressedEntries(t *testing.T) {
 	s := New(db, time.Minute)
 	// An entry written before compression existed is still readable.
 	if _, err := db.db.Exec(`INSERT INTO entries (key, stored_at, body) VALUES (?, ?, ?)`,
-		"old", time.Now().Unix(), []byte(`{"plain":true}`)); err != nil {
+		"old", time.Now().UnixMilli(), []byte(`{"plain":true}`)); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	got, ok := s.Get("old")

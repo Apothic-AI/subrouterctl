@@ -35,6 +35,9 @@ type Options struct {
 	Color        bool
 	QuotaPerUnit float64
 	Out          io.Writer
+	// Err receives the warnings and the errors. They are kept apart from
+	// the payload so that a JSON or YAML stream stays machine readable.
+	Err io.Writer
 }
 
 // DefaultOptions returns options matching the current terminal.
@@ -44,6 +47,7 @@ func DefaultOptions() Options {
 		Color:        isTerminal(os.Stdout),
 		QuotaPerUnit: 500000,
 		Out:          os.Stdout,
+		Err:          os.Stderr,
 	}
 }
 
@@ -56,6 +60,9 @@ type Writer struct {
 func New(opts Options) *Writer {
 	if opts.Out == nil {
 		opts.Out = os.Stdout
+	}
+	if opts.Err == nil {
+		opts.Err = os.Stderr
 	}
 	if opts.QuotaPerUnit <= 0 {
 		opts.QuotaPerUnit = 500000
@@ -261,9 +268,11 @@ func isTerminal(f *os.File) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// Note prints an informational line.
+// Note prints an informational line. In a structured payload the line goes
+// to the error stream, so that the payload stays machine readable.
 func (w *Writer) Note(format string, a ...any) {
 	if w.IsStructured() {
+		fmt.Fprintln(w.opts.Err, w.dim(fmt.Sprintf(format, a...)))
 		return
 	}
 	fmt.Fprintln(w.opts.Out, w.dim(fmt.Sprintf(format, a...)))
@@ -277,20 +286,15 @@ func (w *Writer) Success(format string, a ...any) {
 	fmt.Fprintln(w.opts.Out, w.green("✓ ")+fmt.Sprintf(format, a...))
 }
 
-// Warn prints a warning line.
+// Warn prints a warning line. Warnings go to the error stream, so they
+// never end up inside a JSON or YAML payload.
 func (w *Writer) Warn(format string, a ...any) {
-	if w.IsStructured() {
-		return
-	}
-	fmt.Fprintln(w.opts.Out, w.yellow("! ")+fmt.Sprintf(format, a...))
+	fmt.Fprintln(w.opts.Err, w.yellow("! ")+fmt.Sprintf(format, a...))
 }
 
-// Error prints an error line.
+// Error prints an error line. It goes to the error stream.
 func (w *Writer) Error(format string, a ...any) {
-	if w.IsStructured() {
-		return
-	}
-	fmt.Fprintln(w.opts.Out, w.red("✗ ")+fmt.Sprintf(format, a...))
+	fmt.Fprintln(w.opts.Err, w.red("✗ ")+fmt.Sprintf(format, a...))
 }
 
 // Plain prints a line without decoration.

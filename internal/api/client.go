@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -43,7 +44,7 @@ type Client struct {
 	LogRanges *cache.RangeStore
 	// CacheNotice is called when a response is served from the cache rather
 	// than from the network, so that the command layer can say so.
-	CacheNotice func(format string, a ...any)
+	CacheNotice func(msg string)
 	// retryWait is how long the client waits before it tries a rate
 	// limited request again.
 	retryWait time.Duration
@@ -166,15 +167,32 @@ func (c *Client) Do(ctx context.Context, method, path string, params Params, bod
 	if len(raw) == 0 {
 		return nil
 	}
-	var env Envelope
-	if err := json.Unmarshal(raw, &env); err != nil {
+	if !isEnvelope(raw) {
 		// Not an envelope (for example a /v1/* response): decode directly.
 		return json.Unmarshal(raw, out)
+	}
+	var env Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return err
 	}
 	if len(env.Data) == 0 || string(env.Data) == "null" {
 		return nil
 	}
 	return json.Unmarshal(env.Data, out)
+}
+
+// isEnvelope reports whether a body is an /api envelope.
+//
+// The envelope is recognised by its keys, not by the success of decoding
+// it: a plain object without a data field must be decoded as it is.
+func isEnvelope(raw []byte) bool {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	_, hasData := probe["data"]
+	_, hasSuccess := probe["success"]
+	return hasData || hasSuccess
 }
 
 // DoRaw performs a request and returns the raw response body.
@@ -206,7 +224,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, params Params, 
 	// The cache is written through on every request. It is read only when
 	// the caller asked for a time to live.
 	cacheable = cacheable && method == http.MethodGet && c.Cache.Enabled()
-	key := cache.Key(c.Scope(), method, path, query)
+	key := cache.Key(c.Scope(mode), method, path, query)
 	if cacheable && c.Cache.Fresh() {
 		if body, ok := c.Cache.Get(key); ok {
 			return body, nil
@@ -245,7 +263,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, params Params, 
 		// The network is unavailable. Fall back to whatever is on disk.
 		if cacheable {
 			if cached, ok := c.Cache.GetAny(key); ok {
-				c.NoticeCache("served %s %s from the local cache because the network is unavailable", method, path)
+				c.NoticeCache(fmt.Sprintf("served %s %s from the local cache because %s", method, path, reason(err)))
 				return cached, nil
 			}
 		}
@@ -322,20 +340,41 @@ func (c *Client) send(ctx context.Context, req *http.Request) (*http.Response, e
 	}
 }
 
-// Scope identifies the site and the account a request belongs to.
+// Scope identifies the cache space a request belongs to.
 //
 // The cache is shared by every account that uses the same cache directory,
-// so the scope keeps their responses apart.
-func (c *Client) Scope() string {
-	sum := sha256.Sum256([]byte(c.AccessToken + "\x00" + c.APIKey))
-	return c.BaseURL + "|" + strconv.Itoa(c.UserID) + "|" + hex.EncodeToString(sum[:])[:8]
+// so the scope keeps their responses apart. A public response is the same
+// for everybody and is shared.
+func (c *Client) Scope(mode AuthMode) string {
+	switch mode {
+	case AuthRelay:
+		sum := sha256.Sum256([]byte(c.APIKey))
+		return c.BaseURL + "|relay|" + hex.EncodeToString(sum[:])[:8]
+	case AuthManagement:
+		sum := sha256.Sum256([]byte(c.AccessToken))
+		return c.BaseURL + "|account|" + strconv.Itoa(c.UserID) + "|" + hex.EncodeToString(sum[:])[:8]
+	default:
+		return c.BaseURL + "|public"
+	}
+}
+
+// reason describes why a request failed, in words a user can act on.
+func reason(err error) string {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "the platform did not answer in time"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "the request ran out of time"
+	}
+	return "the network is unavailable"
 }
 
 // NoticeCache tells the caller that a response came from the cache instead
 // of from the network, so that it can be reported to the user.
-func (c *Client) NoticeCache(format string, a ...any) {
+func (c *Client) NoticeCache(msg string) {
 	if c.CacheNotice != nil {
-		c.CacheNotice(fmt.Sprintf(format, a...))
+		c.CacheNotice(msg)
 	}
 }
 

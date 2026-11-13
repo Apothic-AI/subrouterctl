@@ -30,11 +30,11 @@ func TestRangeStoreCoversWhatItHolds(t *testing.T) {
 	if len(missing) != 2 {
 		t.Fatalf("Missing = %v, want two spans", missing)
 	}
-	if missing[0].From != 50 || missing[0].To != 100 {
-		t.Errorf("first gap = %v, want 50 to 100", missing[0])
+	if missing[0].From != 50 || missing[0].To != 99 {
+		t.Errorf("first gap = %v, want 50 to 99", missing[0])
 	}
-	if missing[1].From != 200 || missing[1].To != 250 {
-		t.Errorf("second gap = %v, want 200 to 250", missing[1])
+	if missing[1].From != 201 || missing[1].To != 250 {
+		t.Errorf("second gap = %v, want 201 to 250", missing[1])
 	}
 }
 
@@ -44,8 +44,8 @@ func TestRangeStoreFetchesOnlyTheGap(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	missing := s.Missing("sig", 100, 300)
-	if len(missing) != 1 || missing[0].From != 200 || missing[0].To != 300 {
-		t.Fatalf("Missing = %v, want 200 to 300", missing)
+	if len(missing) != 1 || missing[0].From != 201 || missing[0].To != 300 {
+		t.Fatalf("Missing = %v, want 201 to 300", missing)
 	}
 }
 
@@ -150,9 +150,9 @@ func TestMissingSpans(t *testing.T) {
 	}{
 		{nil, 0, 100, []Span{{0, 100}}},
 		{[]Span{{0, 100}}, 0, 100, nil},
-		{[]Span{{0, 100}}, 50, 150, []Span{{100, 150}}},
-		{[]Span{{50, 100}}, 0, 100, []Span{{0, 50}}},
-		{[]Span{{0, 100}, {200, 300}}, 0, 300, []Span{{100, 200}}},
+		{[]Span{{0, 100}}, 50, 150, []Span{{101, 150}}},
+		{[]Span{{50, 100}}, 0, 100, []Span{{0, 49}}},
+		{[]Span{{0, 100}, {200, 300}}, 0, 300, []Span{{101, 199}}},
 		{[]Span{{0, 1000}}, 0, 100, nil},
 	}
 	for _, c := range cases {

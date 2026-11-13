@@ -394,16 +394,59 @@ func newAccountBalanceCommand() *cobra.Command {
 				return w.Structured(map[string]any{"subscription": sub, "usage": usage})
 			}
 			fields := []render.Field{
-				{Label: "Balance", Value: fmt.Sprintf("%v", sub)},
+				{Label: "Balance", Value: moneyOf(sub, "hard_limit_usd")},
+				{Label: "Soft limit", Value: moneyOf(sub, "soft_limit_usd")},
+				{Label: "Payment method", Value: boolText(sub, "has_payment_method")},
 			}
 			if usage != nil {
-				fields = append(fields, render.Field{Label: "Usage", Value: fmt.Sprintf("%v", usage)})
+				fields = append(fields,
+					render.Field{Label: "Usage", Value: moneyOf(usage, "total_usage")},
+					render.Field{Label: "Object", Value: stringOf(usage, "object")})
 			}
 			w.Detail("Billing", fields)
 			_ = c
 			return nil
 		},
 	}
+}
+
+// moneyOf reads a dollar amount out of a decoded API payload.
+func moneyOf(payload any, field string) string {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return "-"
+	}
+	v, ok := m[field].(float64)
+	if !ok {
+		return "-"
+	}
+	return fmt.Sprintf("$%.2f", v)
+}
+
+// boolText reads a boolean out of a decoded API payload.
+func boolText(payload any, field string) string {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return "-"
+	}
+	v, ok := m[field].(bool)
+	if !ok {
+		return "-"
+	}
+	return boolLabel(v)
+}
+
+// stringOf reads a string out of a decoded API payload.
+func stringOf(payload any, field string) string {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return "-"
+	}
+	v, ok := m[field].(string)
+	if !ok || v == "" {
+		return "-"
+	}
+	return v
 }
 
 func newAccountNotificationsCommand() *cobra.Command {

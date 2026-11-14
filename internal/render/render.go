@@ -154,14 +154,16 @@ func (w *Writer) Table(cols []Column, rows [][]string) {
 		}
 	}
 
-	top := w.dim("┌" + strings.Repeat("─", totalWidth(widths)+3*(len(cols)-1)) + "┐")
+	// Every border is drawn on the same column grid as the rows, so the box
+	// closes on all four sides.
+	top := w.dim("┌" + strings.Join(repeat("─", widths), "┬") + "┐")
 	fmt.Fprintln(w.opts.Out, top)
-	fmt.Fprintln(w.opts.Out, w.dim("│")+w.bold(headerRow(cols, widths)))
-	fmt.Fprintln(w.opts.Out, w.dim("├"+"┼"+strings.Repeat("─", totalWidth(widths)+3*(len(cols)-1))+"┤"))
+	fmt.Fprintln(w.opts.Out, w.dim("│")+w.bold(headerRow(cols, widths))+"│")
+	fmt.Fprintln(w.opts.Out, w.dim("├"+strings.Join(repeat("─", widths), "┼")+"┤"))
 	for _, r := range rows {
-		fmt.Fprintln(w.opts.Out, w.dim("│")+bodyRow(cols, r, widths))
+		fmt.Fprintln(w.opts.Out, w.dim("│")+bodyRow(cols, r, widths)+"│")
 	}
-	fmt.Fprintln(w.opts.Out, w.dim("└"+"┴"+strings.Join(repeat("─", widths), "┴")+"┘"))
+	fmt.Fprintln(w.opts.Out, w.dim("└"+strings.Join(repeat("─", widths), "┴")+"┘"))
 }
 
 // headerRow renders the header cells padded to their column widths.
@@ -188,14 +190,6 @@ func bodyRow(cols []Column, row []string, widths []int) string {
 		cells[i] = pad(v, widths[i], align)
 	}
 	return " " + strings.Join(cells, " │ ") + " "
-}
-
-func totalWidth(widths []int) int {
-	n := 0
-	for _, w := range widths {
-		n += w
-	}
-	return n
 }
 
 func repeat(s string, widths []int) []string {

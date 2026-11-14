@@ -58,6 +58,15 @@ echo
 echo "credentials"
 check "auth status" "$BIN" auth status
 
+# A provider the account is subscribed to, so the fixed and smart keys below
+# have something to point at. Resolved at runtime, so the script works on any
+# account without naming a provider here.
+SUB_SLUG=$("$BIN" -o json provider subs --limit 1 2>/dev/null | grep -oE '"slug": *"[^"]+"' | head -1 | grep -oE '"[^"]+"$' | tr -d '"')
+if [[ -z "$SUB_SLUG" ]]; then
+  FAIL=$((FAIL + 1))
+  printf '  \033[31m✗\033[0m could not resolve a subscribed provider slug\n'
+fi
+
 echo
 echo "account"
 check "account info" "$BIN" account info
@@ -96,8 +105,8 @@ echo
 echo "token lifecycle"
 for kind in smart fixed shared official; do
   args=(token create --type "$kind" --name "smoke-$kind" --unlimited)
-  [[ "$kind" == fixed ]] && args+=(--provider demo)
-  [[ "$kind" == smart ]] && args+=(--providers demo)
+  [[ "$kind" == fixed ]] && args+=(--provider "$SUB_SLUG")
+  [[ "$kind" == smart ]] && args+=(--providers "$SUB_SLUG")
   if out=$("$BIN" "${args[@]}" 2>&1); then
     PASS=$((PASS + 1))
     printf '  \033[32m✓\033[0m create %s key\n' "$kind"
@@ -166,7 +175,7 @@ fi
 echo
 echo "provider directory"
 check "provider list" "$BIN" provider list --limit 5
-check "provider list search" "$BIN" provider list --search demo --limit 5
+check "provider list search" "$BIN" provider list --search "$SUB_SLUG" --limit 5
 check "provider list sorted" "$BIN" provider list --sort rating --order desc --limit 5
 check "provider subs" "$BIN" provider subs --limit 5
 check "provider sub-config" "$BIN" provider sub-config

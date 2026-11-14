@@ -13,6 +13,10 @@ PASS=0
 FAIL=0
 CREATED_KEYS=()
 
+# The names the suite gives to the keys it creates. They are the only names
+# the pre-flight sweep is allowed to delete.
+SMOKE_NAMES=(smoke-smart smoke-fixed smoke-shared smoke-official smoke-renamed)
+
 if [[ ! -x "$BIN" ]]; then
   echo "smoke: binary not found or not executable: $BIN" >&2
   exit 2
@@ -43,12 +47,73 @@ check_fail() {
   fi
 }
 
+# ids_named prints the ids of the keys whose name is exactly the one asked
+# for. The platform search is a substring match, so the names are compared
+# here to make sure a key of the user is never caught by the sweep.
+ids_named() {
+  local want="$1"
+  "$BIN" -o json token list --search "$want" --limit 100 2>/dev/null | python3 -c '
+import json, sys
+
+want = sys.argv[1]
+try:
+    items = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+if isinstance(items, dict):
+    items = items.get("items", [])
+for item in items:
+    if isinstance(item, dict) and item.get("name") == want and item.get("id"):
+        print(item["id"])
+' "$want"
+}
+
+# sweep_leftovers removes the keys an earlier interrupted run left behind.
+# Only the names this suite uses are touched.
+sweep_leftovers() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '  python3 is missing, so the leftover keys cannot be swept\n'
+    return 0
+  fi
+  local ids=() name id
+  for name in "${SMOKE_NAMES[@]}"; do
+    while read -r id; do
+      [[ -n "$id" ]] && ids+=("$id")
+    done < <(ids_named "$name")
+  done
+  if (( ${#ids[@]} == 0 )); then
+    printf '  nothing to sweep\n'
+    return 0
+  fi
+  printf '  found %d leftover key(s) from an earlier run: %s\n' "${#ids[@]}" "${ids[*]}"
+  if "$BIN" token delete-batch "${ids[@]}" --yes >/dev/null 2>&1; then
+    printf '  \033[32m✓\033[0m removed them\n'
+  else
+    printf '  \033[31m✗\033[0m could not remove them: %s token delete-batch %s --yes\n' \
+      "$BIN" "${ids[*]}"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# cleanup removes the keys the run created. A key that is left behind is a
+# live credential on the account, so a failed cleanup is reported and the
+# script exits with a failure.
+CLEANED=0
 cleanup() {
+  (( CLEANED )) && return
+  CLEANED=1
   if (( ${#CREATED_KEYS[@]} )); then
-    "$BIN" token delete-batch "${CREATED_KEYS[@]}" --yes >/dev/null 2>&1 || true
+    if ! "$BIN" token delete-batch "${CREATED_KEYS[@]}" --yes >/dev/null 2>&1; then
+      printf '  \033[31m✗\033[0m could not delete %d throwaway keys (%s)\n' \
+        "${#CREATED_KEYS[@]}" "${CREATED_KEYS[*]}" >&2
+      printf '     remove them with: %s token delete-batch %s --yes\n' "$BIN" "${CREATED_KEYS[*]}" >&2
+      exit 1
+    fi
   fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo
 echo "subrouterctl smoke test against $BASE"
@@ -57,6 +122,10 @@ echo "────────────────────────�
 echo
 echo "credentials"
 check "auth status" "$BIN" auth status
+
+echo
+echo "leftovers"
+sweep_leftovers
 
 # A provider the account is subscribed to, so the fixed and smart keys below
 # have something to point at. Resolved at runtime, so the script works on any

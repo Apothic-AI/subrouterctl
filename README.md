@@ -4,13 +4,54 @@
 
 **Run your whole SubRouter account from the terminal.**
 
-One binary. Every documented account-management endpoint. No browser required.
+Every documented account-management endpoint, one binary, no browser required.
+The same core is also a Python and a TypeScript package.
 
-[![Go](https://img.shields.io/badge/go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go](https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-00b3a4)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos-6c7577)](https://github.com/)
+[![Bindings](https://img.shields.io/badge/bindings-python%20%7C%20typescript-6c7577)](packages)
 
 </div>
+
+---
+
+## At a glance
+
+- **API keys** — All four kinds: smart routing, a pinned provider, shared
+  pools, official channels. Pin a model to a provider, set a quota, a price
+  ceiling or an IP allowlist.
+- **Directories** — The model directory and the provider directory, with
+  search, sort and filters. Every entry opens on its own.
+- **Usage** — Every log field the platform returns, with the throughput the
+  console shows, and the totals of any window.
+- **The rest** — Top-ups, referrals, async task records, provider
+  subscriptions, shared plans, the merchant and station consoles.
+- **Output** — Bordered tables for people, JSON and YAML for scripts. The
+  payload goes to stdout, the warnings to stderr.
+- **Speed** — Every response is cached in SQLite. A week of logs takes about a
+  minute once, then under a second.
+- **From a program** — The same core as a Python and a TypeScript package.
+
+---
+
+## Contents
+
+- [At a glance](#at-a-glance)
+- [The problem it solves](#the-problem-it-solves)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [The four kinds of key](#the-four-kinds-of-key)
+- [Searching and sorting](#searching-and-sorting)
+- [Single listings](#single-listings)
+- [Command map](#command-map)
+- [Endpoint coverage](#endpoint-coverage)
+- [Output formats](#output-formats)
+- [Caching](#caching)
+- [Credentials](#credentials)
+- [Python and TypeScript](#python-and-typescript)
+- [Safety](#safety)
+- [Development](#development)
 
 ---
 
@@ -50,6 +91,10 @@ Or build in place:
 make build            # -> ./subrouterctl
 ```
 
+Building needs Go 1.27 or newer. The result is a single file you can copy
+anywhere. The [Python and TypeScript packages](#python-and-typescript) sit on
+the same source.
+
 ---
 
 ## Quick start
@@ -63,7 +108,13 @@ subrouterctl account info
 
 # 3. create a key that always routes through one provider
 subrouterctl token create --type fixed --name "demo only" --provider demo
+
+# 4. the key is masked in the table; --show-secrets prints it in full
+subrouterctl token create --type smart --name "router" --show-secrets
 ```
+
+The credentials land in `~/.subrouter/credentials.json`, so every later
+command works without an argument.
 
 ---
 
@@ -113,6 +164,38 @@ stability_first   authenticity_first   provider_credit_first   first_token_first
 `--sort-mode` picks how candidates of equal standing are ordered:
 `token_price_first` (default) or `per_call_price_first`.
 
+### Every flag of a key
+
+`token create` and `token update` take the same flags. On an update, a flag
+that is not given keeps the value of the stored key.
+
+| Flag                         | Meaning                                                    |
+| ---------------------------- | ---------------------------------------------------------- |
+| `--type`                     | `smart`, `official`, `shared` or `fixed`.                  |
+| `--name`                     | The name of the key.                                       |
+| `--provider`                 | The provider slug a fixed key is pinned to.                |
+| `--providers`                | Comma separated slugs a smart key may use.                 |
+| `--models`                   | Comma separated model whitelist. Empty means every model.  |
+| `--model-route`              | `model=provider1,provider2`. Repeatable.                   |
+| `--route-preference`         | The ordered routing criteria, comma separated.             |
+| `--sort-mode`                | `token_price_first` or `per_call_price_first`.             |
+| `--load-balance`             | Spread the traffic over the candidates.                    |
+| `--include-cache-hit`        | Weigh the cache hit rate. On by default.                   |
+| `--include-provider-self`    | Allow routes through provider operated channels.           |
+| `--include-official-channels`| Allow routes through platform official channels.           |
+| `--include-shared-subscriptions` | Allow routes through subscribed shared pools.           |
+| `--official-max-discount`    | The highest discount factor of an official channel.        |
+| `--shared-max-discount`      | The highest discount factor of a shared plan.              |
+| `--official-channel`         | Pin the key to one official channel id.                    |
+| `--unlimited`                | Give the key unlimited quota. On by default.               |
+| `--quota-usd`                | A quota in dollars.                                        |
+| `--quota-units`              | A quota in raw platform units.                             |
+| `--expire`                   | `never`, `30d`, `12h` or a unix timestamp.                 |
+| `--allow-ips`                | An IP or CIDR allowlist, one per line.                     |
+| `--cross-group-retry`        | Retry the next group when the current one fails.           |
+| `--group`                    | Override the routing group.                                |
+| `--key-group`                | Attach the key to a key group id.                          |
+
 ---
 
 ## Searching and sorting
@@ -126,6 +209,7 @@ Every directory, log feed and task list takes the same three flags.
 | `--order`         | `asc` (default) or `desc`.                                      |
 | `--limit`         | Maximum rows to print. `0` prints everything.                    |
 | `--page`          | Page number for the server-side paged endpoints.                 |
+| `--page-size`     | Rows per page. `50` by default.                                 |
 
 ```bash
 # cheapest routes for gpt models, most expensive first
@@ -295,9 +379,9 @@ subrouterctl
 ├── task            list · show
 ├── merchant        self · models · model-create · model-update · model-batch
 │                   price-preview · channels · channel-test · earnings · payouts · register
-└── station         self · dashboard · models · global-models · packages
-                    customers · key-groups · shared · official-channels
-                    logs · earnings
+├── station         self · dashboard · models · global-models · packages
+│                   customers · key-groups · shared · official-channels
+│                   logs · earnings
 └── bridge          the machine interface, on stdin and stdout
 ```
 
@@ -311,7 +395,7 @@ expected answer.
 
 Every endpoint in the
 [Account Management API reference](https://subrouter.ai/docs?tab=account-api)
-has a command.
+has a command. All 35 of them.
 
 | Documented endpoint                                    | Command                              |
 | ------------------------------------------------------ | ------------------------------------ |
@@ -335,7 +419,7 @@ has a command.
 | `DELETE /api/marketplace/subscribe/{provider_id}`       | `provider unsubscribe`               |
 | `DELETE /api/marketplace/subscriptions`                 | `provider unsubscribe-all`           |
 | `GET /api/marketplace/subscription-config`              | `provider sub-config`                |
-| `PUT /api/marketplace/subscription-config`              | `provider sub-config --auto-subscribe`|
+| `PUT /api/marketplace/subscription-config`              | `provider sub-config --auto-subscribe` |
 | `GET /api/shared-subscriptions/plans`                   | `shared list`                        |
 | `POST /api/shared-subscriptions/plans/{id}/subscribe`   | `shared subscribe`                   |
 | `DELETE /api/shared-subscriptions/plans/{id}/subscribe` | `shared cancel`                      |
@@ -367,6 +451,27 @@ subrouterctl -o json account info                # machine readable
 subrouterctl -o yaml token list --limit 3        # machine readable
 ```
 
+```console
+$ subrouterctl -o json account info
+{
+  "id": 10001,
+  "username": "demo-user",
+  "display_name": "demo-user",
+  "email": "",
+  "role": 1,
+  "group": "default",
+  "quota": 25000000,
+  "used_quota": 125000000,
+  "request_count": 13724,
+  "status": 1,
+  "aff_code": "DEMO",
+  "aff_quota": 0,
+  "inviter_id": 0,
+  "deleted_at": null,
+  "created_time": 0
+}
+```
+
 Every list command honours `--output`, and the JSON and YAML payloads use the
 same field names as the platform's own API.
 
@@ -388,6 +493,12 @@ separate decision:
 | `--cache-ttl 5m` and the entry is that fresh  | The cache                    |
 | The network is down                           | The cache, with a warning    |
 | Usage logs                                    | The cache, see below         |
+
+| Flag            | Meaning                                                          |
+| --------------- | ---------------------------------------------------------------- |
+| `--cache-ttl`   | Serve cached responses younger than this. `0` reads live data.   |
+| `--cache-dir`   | Where the cache lives. Default `~/.cache/subrouterctl`.          |
+| `--cache-clear` | Remove every cached entry and exit.                              |
 
 Nothing is ever served stale without either `--cache-ttl` or a dead network,
 and the offline fallback always says so:
@@ -421,14 +532,8 @@ $ subrouterctl usage logs --from 7d
 ! part of the requested range could not be fetched: GET /api/log/self: …
 ```
 
-Wide ranges are fetched in parallel chunks, so a week of logs takes a couple
-of minutes the first time and a second afterwards.
-
-| Flag            | Meaning                                                          |
-| --------------- | ---------------------------------------------------------------- |
-| `--cache-ttl`   | Serve cached responses younger than this. `0` reads live data.   |
-| `--cache-dir`   | Where the cache lives. Default `~/.cache/subrouterctl`.          |
-| `--cache-clear` | Remove every cached entry and exit.                              |
+Wide ranges are fetched in parallel chunks, so a week of logs takes about a
+minute the first time and under a second afterwards.
 
 The cache lives in `~/.cache/subrouterctl/cache.db`, a SQLite database with
 mode `0600`. Payloads are compressed, so a week of logs takes tens of
@@ -462,16 +567,20 @@ export SUBROUTER_USER_ID=10001
 export SUBROUTER_BASE_URL=https://subrouter.ai
 ```
 
+Every global flag works on every command.
+
 | Flag               | Environment variable    | Meaning                            |
 | ------------------ | ----------------------- | ---------------------------------- |
 | `--base-url`       | `SUBROUTER_BASE_URL`    | Site to talk to                    |
 | `--token`          | `SUBROUTER_ACCESS_TOKEN`| System access token                |
 | `--user-id`        | `SUBROUTER_USER_ID`     | Numeric account id                 |
 | `--api-key`        | `SUBROUTER_API_KEY`     | `sk-` relay key                    |
+| `-o, --output`     | –                       | `table`, `json` or `yaml`          |
 | `--quota-per-unit` | `SUBROUTER_QUOTA_PER_UNIT` | Quota units per 1 USD (500000)  |
 | `--show-secrets`   | –                       | Print secrets in full              |
 | `--cache-ttl`      | –                       | Serve cached responses younger than this |
 | `--cache-dir`      | `SUBROUTER_CACHE_DIR`   | Where the cache lives               |
+| `--cache-clear`    | –                       | Empty the cache and exit            |
 | `--no-color`       | –                       | Plain output                       |
 | `--timeout`        | –                       | Request timeout in seconds         |
 | `-y, --yes`        | –                       | Skip confirmation prompts          |
@@ -492,10 +601,18 @@ most common mistake:
 
 ## Python and TypeScript
 
-The same account, from a program. Two packages in [`packages/`](packages) call
-the Go library this tool is built on, so the cache, the retries and the
+The same account, from a program. The two packages in [`packages/`](packages)
+call the Go library this tool is built on, so the cache, the retries and the
 credential handling are the ones of the tool rather than a second copy of
 them.
+
+| | Python | TypeScript |
+| --- | --- | --- |
+| Package | [`packages/python`](packages/python) | [`packages/typescript`](packages/typescript) |
+| Transport | The Go library in process, over a C ABI | A child process, over a pipe |
+| Needs | The shared library, or the binary as a fallback | The binary |
+| Extra dependencies | None | None |
+| Calls | Synchronous | `async` |
 
 ```python
 from subrouterctl import SubRouterClient
@@ -513,14 +630,29 @@ import { SubRouterClient } from "subrouterctl";
 const client = new SubRouterClient();
 const info = await client.account.info();
 console.log(info.username);
+
+for (const log of await client.usage.logs({ from: "24h", model: "gpt-5", limit: 10 })) {
+  console.log(log.created_at, log.model_name, log.quota);
+}
 ```
 
 Neither package shells out to the CLI and neither one re-implements the API.
-They speak a small JSON protocol to the Go library: Python loads it in
-process over a C ABI, TypeScript talks to it over a pipe. See
-[`packages/README.md`](packages/README.md) for the protocol and
-[`packages/python`](packages/python) and
-[`packages/typescript`](packages/typescript) for the two APIs.
+They speak one small JSON protocol to the Go library, and the tool itself can
+serve that protocol:
+
+```console
+$ echo '{"method":"account.info"}' | subrouterctl bridge
+{"ok":true,"result":{"id":10001,"username":"demo-user","display_name":"demo-user",...}}
+```
+
+The protocol is documented in [`packages/README.md`](packages/README.md), the
+Python API in [`packages/python`](packages/python) and the TypeScript API in
+[`packages/typescript`](packages/typescript).
+
+```bash
+make bindings      # the shared library the Python binding loads
+make test-bindings # the Python and TypeScript tests
+```
 
 ---
 

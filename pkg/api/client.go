@@ -292,7 +292,7 @@ func (c *Client) doRaw(ctx context.Context, method, path string, params Params, 
 	}
 	if cacheable {
 		// A cache write failure must never break the command.
-		_ = c.Cache.Put(key, raw)
+		_ = c.Cache.Put(key, redactSecrets(raw))
 	}
 	return raw, nil
 }

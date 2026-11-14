@@ -539,6 +539,22 @@ The cache lives in `~/.cache/subrouterctl/cache.db`, a SQLite database with
 mode `0600`. Payloads are compressed, so a week of logs takes tens of
 megabytes instead of hundreds.
 
+### Secrets are not cached
+
+The platform hands out the full relay key of every key on the account, so a
+cached response would be a file full of live credentials. The cache is
+scrubbed on the way in: every secret value it holds is replaced by a
+placeholder of the same length, and the cached copy still decodes. The
+command itself is unaffected and still hands you the real key.
+
+```console
+$ subrouterctl token list --limit 1          # prints the key, masked
+$ subrouterctl -o json token list --limit 1  # prints the key in full
+```
+
+`--cache-clear` empties the cache, which is the way to drop the keys that a
+version of the tool before this one may have left on disk.
+
 The public directories are slow to fetch. The model directory holds around
 2100 models spread over 43 pages, and a sorted listing needs all of them.
 Those pages are requested in parallel: the full 2100 model sort went from
@@ -659,6 +675,8 @@ make test-bindings # the Python and TypeScript tests
 ## Safety
 
 - Secrets are masked in every table by default. `--show-secrets` reveals them.
+- The on-disk cache never holds a secret. The values it scrubs are replaced by
+  a placeholder, so a cached response cannot be read back as a live key.
 - Deleting a key, unsubscribing a provider and changing billing settings ask
   for confirmation. `-y` skips the prompt in scripts.
 - Quota limits accept either USD (`--quota-usd 10`) or raw platform units
@@ -682,7 +700,10 @@ make test-bindings # the Python and TypeScript tests
 ```
 
 The smoke test creates and removes a few throwaway API keys, so it needs a
-real system access token. It restores the account to its original state.
+real system access token. It restores the account to its original state: it
+sweeps the keys an earlier interrupted run left behind, and if it cannot
+remove its own keys at the end it says so and fails, rather than leaving
+live credentials behind.
 
 ```
 passed 67, failed 0

@@ -75,6 +75,16 @@ The library is looked for in `SUBROUTERCTL_LIB`, then in the package, then in
 the `build` directory of a checkout. The binary is looked for in
 `SUBROUTERCTL_BIN`, then in a checkout, then in the `PATH`.
 
+The client holds the transport until it is closed, and it works as a context
+manager:
+
+```python
+with SubRouterClient() as client:
+    print(client.account.info()["username"])
+```
+
+The protocol is documented in [the package overview](../README.md).
+
 ## The namespaces
 
 | Namespace | What it holds |
@@ -103,7 +113,8 @@ client.tokens.create(
 
 client.tokens.create(kind="fixed", name="demo only", provider="demo")
 
-client.tokens.create(kind="shared", name="pool", shared_max_discount=0.9)
+# a discount ceiling of 25%, in the basis points the platform uses
+client.tokens.create(kind="shared", name="pool", shared_max_discount=2500)
 ```
 
 A field that is not given keeps the default of the kind. A key is unlimited

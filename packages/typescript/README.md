@@ -31,7 +31,12 @@ npm install subrouterctl
 ```
 
 The package needs the `subrouterctl` binary. It is looked for in
-`SUBROUTERCTL_BIN`, then in the `build` of a checkout, then in the `PATH`.
+`SUBROUTERCTL_BIN`, then in the root of a checkout, then in the `PATH`. A
+binary can also be named outright:
+
+```ts
+const client = new SubRouterClient({ binary: "/usr/local/bin/subrouterctl" });
+```
 
 ```bash
 make build           # in the repository
@@ -59,6 +64,25 @@ const client = new SubRouterClient({
   userId: 10001,
 });
 ```
+
+## The transport
+
+The Go library runs as a child process that speaks the protocol over its
+standard streams. The package starts it when the client is created and keeps
+it alive, so a program that makes many calls pays the start-up once.
+
+```ts
+const client = new SubRouterClient();
+try {
+  await client.account.info();
+} finally {
+  client.close();
+}
+```
+
+The protocol is documented in [the package overview](../README.md).
+
+---
 
 ## The namespaces
 
@@ -88,7 +112,8 @@ await client.tokens.create({
 
 await client.tokens.create({ kind: "fixed", name: "demo only", provider: "demo" });
 
-await client.tokens.create({ kind: "shared", name: "pool", sharedMaxDiscount: 0.9 });
+// a discount ceiling of 25%, in the basis points the platform uses
+await client.tokens.create({ kind: "shared", name: "pool", sharedMaxDiscount: 2500 });
 ```
 
 A field that is not given keeps the default of the kind. A key is unlimited
